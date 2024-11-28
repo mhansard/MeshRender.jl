@@ -1,0 +1,7 @@
+name = "MeshRender"
+uuid = "35f14a6b-b56e-4f03-bed2-0ed8850903b7"
+authors = ["Miles Hansard"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.6.7"
