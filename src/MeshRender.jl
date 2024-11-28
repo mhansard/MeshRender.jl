@@ -1,7 +1,11 @@
 module MeshRender
 
-using StaticArrays, GLFW, ModernGL, Images, ImageView, ImageTransformations, Interpolations, LinearAlgebra, VisionGeometry
-include("moderngl-util.jl")
+using StaticArrays, GLFW, ModernGL, Images, ImageTransformations, Interpolations, LinearAlgebra, VisionGeometry
+
+include(pkgdir(ModernGL, "test", "util.jl"))
+
+vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
+frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
 export Renderer, compile!, options!, buffers!, viewing!, execute!
 
@@ -152,7 +156,7 @@ mutable struct Renderer
    end
 end
 
-function compile!(rend::Renderer, vert_shader::String, frag_shader::String)
+function compile!(rend::Renderer, vert_shader::String=vert_shader_default, frag_shader::String=frag_shader_default)
    vsh = createShader(read(vert_shader,String), GL_VERTEX_SHADER)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
    rend.program = createShaderProgram(vsh,fsh)
