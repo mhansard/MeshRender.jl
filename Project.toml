@@ -15,4 +15,7 @@ VisionGeometry = "27d6d248-4309-480b-9e58-1d926e24aa87"
 
 [compat]
 StaticArrays = "1"
+Images = "0.26"
+Interpolations = "0.15"
+ImageTransformations = "0.10"
 julia = "1.6.7"
