@@ -1,6 +1,20 @@
 module MeshRender
 
-using StaticArrays, GLFW, ModernGL, Images, ImageTransformations, Interpolations, LinearAlgebra, VisionGeometry
+using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry, Images, ImageTransformations, Interpolations
+
+#=
+[compat]
+GLFW = "3"
+ModernGL = "1"
+StaticArrays = "1"
+julia = "1.6.7"
+
+
+Images = "0.26"
+Interpolations = "0.14.7"
+ImageTransformations = "0.10"
+
+=#
 
 include(pkgdir(ModernGL, "test", "util.jl"))
 
@@ -278,6 +292,7 @@ function execute!(rend::Renderer)
    end
    GLFW.DestroyWindow(rend.window)
 end
+
 
 function execute!(rend::Renderer, file::String, image_function=(depth)->depth)
 

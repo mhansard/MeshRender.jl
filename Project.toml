@@ -13,11 +13,3 @@ ModernGL = "66fc600b-dfda-50eb-8b99-91cfa97b1301"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 VisionGeometry = "27d6d248-4309-480b-9e58-1d926e24aa87"
 
-[compat]
-GLFW = "3"
-ModernGL = "1"
-StaticArrays = "1"
-Images = "0.26"
-Interpolations = "0.15"
-ImageTransformations = "0.10"
-julia = "1.6.7"
