@@ -1,20 +1,7 @@
 module MeshRender
 
-using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry, Images, ImageTransformations, Interpolations
-
-#=
-[compat]
-GLFW = "3"
-ModernGL = "1"
-StaticArrays = "1"
-julia = "1.6.7"
-
-
-Images = "0.26"
-Interpolations = "0.14.7"
-ImageTransformations = "0.10"
-
-=#
+using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry,
+Images, ImageTransformations, Interpolations
 
 include(pkgdir(ModernGL, "test", "util.jl"))
 
@@ -230,7 +217,7 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 	### points
 	rend.num_points = mapreduce(length,+,points)
 	println("loading $(rend.num_points) pts")
-	data_pts = gl_vec(reduce(vcat,reduce(vcat,points)))
+	data_pts = gl_vec(reduce(vcat,reduce(vcat,points),init=[]))
 
 	glBindVertexArray(rend.points_vao)
 	glBindBuffer(GL_ARRAY_BUFFER, rend.points_vbo)
@@ -262,7 +249,9 @@ function update!(rend::Renderer)
 end
 
 function execute!(rend::Renderer)
-
+	# Initalize as opaque
+   glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
+	# Key controls
    GLFW.SetKeyCallback(rend.window, (window, button, code, action, modifier) ->
    begin
       if button == GLFW.KEY_ESCAPE
@@ -276,12 +265,11 @@ function execute!(rend::Renderer)
       elseif button == GLFW.KEY_O && action == GLFW.PRESS
          rend.opaque = !rend.opaque
 			println("$((1.0+rend.opaque)/2)")
-         glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2))
+         glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2.0))
       end
       glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    end)
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
-   #glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
    glBindFramebuffer(GL_FRAMEBUFFER,0)
 
    while !GLFW.WindowShouldClose(rend.window)
