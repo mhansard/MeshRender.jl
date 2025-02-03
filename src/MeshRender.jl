@@ -8,6 +8,10 @@ include(pkgdir(ModernGL, "test", "util.jl"))
 vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
 frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
+#global press_cursor_pos = NamedTuple{(:x,:y)}((nothing,nothing))
+
+const press_cursor_pos = MVector(NaN,NaN)
+
 export Renderer, compile!, options!, buffers!, viewing!, execute!
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
@@ -66,6 +70,18 @@ function gl_image(window)
                 GL_RGBA, GL_UNSIGNED_BYTE, pointer(gl_data))
    colorview(RGBA, normedview(reshape(gl_data,(4,fb_size[1],fb_size[2]))))
    # imshow(img, axes=(2,1), flipy=true)
+end
+
+function mouse_event(window::GLFW.Window, button::GLFW.MouseButton, action::GLFW.Action, mods::Int32)
+
+	if button == GLFW.MOUSE_BUTTON_LEFT && action == GLFW.PRESS
+		press_cursor_pos .= [GLFW.GetCursorPos(window)...]
+		println("pressed @$(press_cursor_pos)")
+	elseif button == GLFW.MOUSE_BUTTON_LEFT && action == GLFW.RELEASE
+		pos = GLFW.GetCursorPos(window)
+		println("drag: [$(press_cursor_pos), $(pos)]")
+	end
+
 end
 
 "Initialize GL vector from concatenated array"
@@ -153,7 +169,11 @@ mutable struct Renderer
       println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
       dbits = []
       #print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
-      return(rend)
+
+
+		GLFW.SetMouseButtonCallback(rend.window, mouse_event)
+
+      return rend
    end
 end
 
