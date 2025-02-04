@@ -5,12 +5,11 @@ Images, ImageTransformations, Interpolations
 
 include(pkgdir(ModernGL, "test", "util.jl"))
 
-vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
-frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
+const vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
+const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
-#global press_cursor_pos = NamedTuple{(:x,:y)}((nothing,nothing))
-
-const press_cursor_pos = MVector(NaN,NaN)
+# Arcball press-location -- all zeros represents undefined state.
+#const press_pos = @MVector [0.0, 0.0, 0.0]
 
 export Renderer, compile!, options!, buffers!, viewing!, execute!
 
@@ -47,7 +46,7 @@ function viewing(cam, at, up)
      0 0 0 1 ]
 end
 
-function modelview(cam, at; up=[0; 1; 0], rotation=identity(3), scale=1)
+function modelview(cam, at; up=[0; 1; 0], rotation=I, scale=1)
    # Modelview matrix
    # Orientation
    v = normalize(at - cam)
@@ -72,16 +71,20 @@ function gl_image(window)
    # imshow(img, axes=(2,1), flipy=true)
 end
 
-function mouse_event(window::GLFW.Window, button::GLFW.MouseButton, action::GLFW.Action, mods::Int32)
+function arcball_depth(v::SVector{2,Float64}, r::Float64=1.0)
+	s_sqr = sum(v[1:2].^2)
+	(s_sqr <= 0.5*r^2) ? sqrt(r^2 - s_sqr) : (0.5*r^2) / sqrt(s_sqr)
+end
 
-	if button == GLFW.MOUSE_BUTTON_LEFT && action == GLFW.PRESS
-		press_cursor_pos .= [GLFW.GetCursorPos(window)...]
-		println("pressed @$(press_cursor_pos)")
-	elseif button == GLFW.MOUSE_BUTTON_LEFT && action == GLFW.RELEASE
-		pos = GLFW.GetCursorPos(window)
-		println("drag: [$(press_cursor_pos), $(pos)]")
-	end
-
+function arcball_vector(window::GLFW.Window)
+	# Window size and 2D cursor position
+	s = GVector{2}(GLFW.GetWindowSize(window)...)
+	p = GVector{2}(GLFW.GetCursorPos(window)...)
+	# Center and radial 2D vector
+	c = (s .- 1) ./ 2.0
+	q = (p .- c) ./ (min(s...)-1)
+	# Radial 3D vector
+	GVector{3}([q[1], -q[2], arcball_depth(q)])
 end
 
 "Initialize GL vector from concatenated array"
@@ -115,11 +118,16 @@ mutable struct Renderer
 	num_points::Int
 
    rotation
+	rotation_pre
+
    scale
    clip
    fov
    viewpoint
    target
+
+	arc_press::GVector{3}
+	arc_drag::Bool
 
    mode::Render
    opaque::Bool
@@ -127,7 +135,8 @@ mutable struct Renderer
    function Renderer(w, h; visible=true, title="Renderer")
 
       rend = new(w,h)
-      rend.rotation = identity(3)
+      rend.rotation = I
+		rend.rotation_pre = I
       rend.scale = 1
       rend.mode = colour
       rend.opaque = true
@@ -170,8 +179,8 @@ mutable struct Renderer
       dbits = []
       #print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
 
-
-		GLFW.SetMouseButtonCallback(rend.window, mouse_event)
+		rend.arc_press = @SVector[0.0, 0.0, 0.0]
+		rend.arc_drag = false
 
       return rend
    end
@@ -259,36 +268,64 @@ function render(rend::Renderer)
 	end
 end
 
-theta = 0.0
+#theta = 0.0
 function update!(rend::Renderer) 
-   rend.rotation = rotation(theta, @SVector[1.0,1.0,1.0])
+   #rend.rotation = rotation(theta, @SVector[1.0,1.0,1.0])
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
    M = modelview(rend.viewpoint, rend.target, rotation=rend.rotation, scale=rend.scale)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M[:]))
-   global theta += 0.0025 * 1
+   ##global theta += 0.0025 * 1
 end
 
 function execute!(rend::Renderer)
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
 	# Key controls
-   GLFW.SetKeyCallback(rend.window, (window, button, code, action, modifier) ->
-   begin
-      if button == GLFW.KEY_ESCAPE
-         GLFW.SetWindowShouldClose(rend.window,true)
-      elseif button == GLFW.KEY_C && action == GLFW.PRESS
-         rend.mode = colour
-      elseif button == GLFW.KEY_D && action == GLFW.PRESS
-         rend.mode = depth
-		elseif button == GLFW.KEY_P && action == GLFW.PRESS
-         rend.mode = points
-      elseif button == GLFW.KEY_O && action == GLFW.PRESS
-         rend.opaque = !rend.opaque
-			println("$((1.0+rend.opaque)/2)")
-         glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2.0))
-      end
-      glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
-   end)
+   GLFW.SetKeyCallback(rend.window,
+		(window::GLFW.Window, button::GLFW.Key, code::Int32, action::GLFW.Action, mods::Int32) ->
+		begin
+			if button == GLFW.KEY_ESCAPE
+				GLFW.SetWindowShouldClose(rend.window,true)
+			elseif button == GLFW.KEY_C && action == GLFW.PRESS
+				rend.mode = colour
+			elseif button == GLFW.KEY_D && action == GLFW.PRESS
+				rend.mode = depth
+			elseif button == GLFW.KEY_P && action == GLFW.PRESS
+				rend.mode = points
+			elseif button == GLFW.KEY_O && action == GLFW.PRESS
+				rend.opaque = !rend.opaque
+				println("$((1.0+rend.opaque)/2)")
+				glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2.0))
+			end
+			glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
+   	end)
+
+	GLFW.SetMouseButtonCallback(rend.window,
+		(window::GLFW.Window, button::GLFW.MouseButton, action::GLFW.Action, mods::Int32) ->
+		begin
+			if button == GLFW.MOUSE_BUTTON_LEFT
+				# Dragging either stopped or started
+				rend.arc_drag = !rend.arc_drag
+				if action == GLFW.PRESS
+					# Store rotation state & start new arc
+					rend.rotation_pre = rend.rotation
+					rend.arc_press = arcball_vector(window)
+				end
+			end
+		end)
+
+	GLFW.SetCursorPosCallback(rend.window,
+		(window::GLFW.Window, x::Float64, y::Float64) ->
+		begin
+			if rend.arc_drag
+				v = arcball_vector(window)
+				t = angle(rend.arc_press, v)
+				n = cross(rend.arc_press, v)
+				# Compose differential rotation onto previous state
+				rend.rotation = rotation(2.0*t,n) * rend.rotation_pre
+			end
+		end)
+	
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    glBindFramebuffer(GL_FRAMEBUFFER,0)
 
