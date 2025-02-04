@@ -8,9 +8,6 @@ include(pkgdir(ModernGL, "test", "util.jl"))
 const vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
 const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
-# Arcball press-location -- all zeros represents undefined state.
-#const press_pos = @MVector [0.0, 0.0, 0.0]
-
 export Renderer, compile!, options!, buffers!, viewing!, execute!
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
@@ -268,13 +265,10 @@ function render(rend::Renderer)
 	end
 end
 
-#theta = 0.0
 function update!(rend::Renderer) 
-   #rend.rotation = rotation(theta, @SVector[1.0,1.0,1.0])
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
    M = modelview(rend.viewpoint, rend.target, rotation=rend.rotation, scale=rend.scale)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M[:]))
-   ##global theta += 0.0025 * 1
 end
 
 function execute!(rend::Renderer)
@@ -326,6 +320,12 @@ function execute!(rend::Renderer)
 			end
 		end)
 	
+	GLFW.SetScrollCallback(rend.window,
+		(window::GLFW.Window, x::Float64, y::Float64) ->
+		begin
+			rend.viewpoint[3] += y
+		end)
+
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    glBindFramebuffer(GL_FRAMEBUFFER,0)
 
