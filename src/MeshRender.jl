@@ -3,12 +3,12 @@ module MeshRender
 using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry,
 Images, ImageTransformations, Interpolations
 
-include(pkgdir(ModernGL, "test", "util.jl"))
+export Renderer, compile!, options!, buffers!, viewing!
 
+# Auxiliary files
+include(pkgdir(ModernGL, "test", "util.jl"))
 const vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
 const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
-
-export Renderer, compile!, options!, buffers!, viewing!
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
     field of view (degrees), and aspect ratio.
@@ -55,11 +55,15 @@ function gl_image(window)
    # imshow(img, axes=(2,1), flipy=true)
 end
 
+""" Compute z-component of the generalized arcball vector.
+"""
 function arcball_depth(v::GVector{2}, r::Float64=1.0)
 	s_sqr = sum(v[1:2].^2)
 	(s_sqr <= 0.5*r^2) ? sqrt(r^2 - s_sqr) : (0.5*r^2) / sqrt(s_sqr)
 end
 
+""" Compute the generalized arcball vector. 
+"""
 function arcball_vector(window::GLFW.Window)
 	# Window size and 2D cursor position
 	s = GVector{2}(GLFW.GetWindowSize(window)...)
@@ -115,6 +119,7 @@ mutable struct Renderer
    num_faces::Int
 	num_points::Int
 
+	# Constructor
    function Renderer(w, h; visible=true, title="Renderer")
 
       rend = new(w,h)
@@ -158,9 +163,10 @@ mutable struct Renderer
       glDrawBuffers(1,pointer(draw_bf))
       status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
-      println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
-      dbits = []
-      #print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
+
+      # println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
+      # dbits = []
+      # print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
 
 		rend.arc_press = @SVector[0.0, 0.0, 0.0]
 		rend.arc_drag = false
@@ -169,6 +175,8 @@ mutable struct Renderer
    end
 end
 
+""" Compile and link shaders.
+"""
 function compile!(rend::Renderer, vert_shader::String=vert_shader_default, frag_shader::String=frag_shader_default)
    vsh = createShader(read(vert_shader,String), GL_VERTEX_SHADER)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
@@ -177,6 +185,8 @@ function compile!(rend::Renderer, vert_shader::String=vert_shader_default, frag_
 	options!(rend)
 end
 
+""" Set default options.
+"""
 function options!(rend::Renderer)
    bg = [211,215,207]/255
    glClearColor(bg..., 1.0)
@@ -187,6 +197,8 @@ function options!(rend::Renderer)
    glEnable(GL_PROGRAM_POINT_SIZE)
 end
 
+""" Set the viewing parameters.
+"""
 function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov::Float64, viewpoint::Vector{Float64}, target::Vector{Float64}=[0.0,0.0,0.0])
    rend.scale = scale
    rend.clip = clip
@@ -199,6 +211,8 @@ function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P[:]))
 end
 
+""" Load data buffers for shaders.
+"""
 function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 
    rend.num_vertices = length(vertices)
@@ -210,7 +224,6 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 	data = gl_vec(vcat(stack(vertices[reduce(vcat,faces)]),
 	            stack(repeat(normals, inner=3)),  
 					stack(repeat(colours, inner=3))))
-
 
    glBindVertexArray(rend.object_vao)
    glBindBuffer(GL_ARRAY_BUFFER, rend.mesh_vbo)
@@ -228,7 +241,7 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 
 	### points
 	rend.num_points = mapreduce(length,+,points)
-	println("loading $(rend.num_points) pts")
+	# println("loading $(rend.num_points) pts")
 	data_pts = gl_vec(reduce(vcat,reduce(vcat,points),init=[]))
 
 	glBindVertexArray(rend.points_vao)
@@ -239,6 +252,8 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 
 end
 
+""" Render one frame.
+"""
 function render(rend::Renderer)
    if rend.mode == colour || rend.mode == depth
       glBindVertexArray(rend.object_vao)
@@ -251,15 +266,20 @@ function render(rend::Renderer)
 	end
 end
 
+""" Update viewing geometry.
+"""
 function update!(rend::Renderer) 
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
    M = modelview(rend.viewpoint, rend.target, rotation=rend.rotation, scale=rend.scale)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M[:]))
 end
 
+""" Set interface callbacks and start the Renderer 
+"""
 function (rend::Renderer)()
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
+
 	# Key controls
    GLFW.SetKeyCallback(rend.window,
 		(window::GLFW.Window, button::GLFW.Key, code::Int32, action::GLFW.Action, mods::Int32) ->
@@ -274,12 +294,12 @@ function (rend::Renderer)()
 				rend.mode = points
 			elseif button == GLFW.KEY_O && action == GLFW.PRESS
 				rend.opaque = !rend.opaque
-				println("$((1.0+rend.opaque)/2)")
 				glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2.0))
 			end
 			glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    	end)
 
+	# Arcball button controls
 	GLFW.SetMouseButtonCallback(rend.window,
 		(window::GLFW.Window, button::GLFW.MouseButton, action::GLFW.Action, mods::Int32) ->
 		begin
@@ -294,6 +314,7 @@ function (rend::Renderer)()
 			end
 		end)
 
+	# Arcball drag controls
 	GLFW.SetCursorPosCallback(rend.window,
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
@@ -306,6 +327,7 @@ function (rend::Renderer)()
 			end
 		end)
 	
+	# Scrollwheel zoom control
 	GLFW.SetScrollCallback(rend.window,
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
