@@ -8,12 +8,12 @@ include(pkgdir(ModernGL, "test", "util.jl"))
 const vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
 const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
-export Renderer, compile!, options!, buffers!, viewing!, execute!
+export Renderer, compile!, options!, buffers!, viewing!
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
     field of view (degrees), and aspect ratio.
 """
-function perspective(limits, fov_v_deg, aspect=1)
+function perspective(limits, fov_v_deg::Float64, aspect::Float64=1.0)
    # Homogeneous perspective
    f = 1/tan(radians(fov_v_deg)/2)
    d = limits[2] - limits[1]
@@ -30,20 +30,7 @@ end
 """ Construct modelview matrix from coordinates of camera, 
     target, and up-vector.
 """
-function viewing(cam, at, up)
-   # Modelview matrix
-   # Orientation
-   v = normalize(at - cam)
-   n = normalize(cross(v,up))
-   u = normalize(cross(n,v))
-   # Homogeneous form with translation
-   [ n' -dot(n,cam);
-     u' -dot(u,cam);
-    -v'  dot(v,cam); 
-     0 0 0 1 ]
-end
-
-function modelview(cam, at; up=[0; 1; 0], rotation=I, scale=1)
+function modelview(cam::GVector{3}, at::GVector{3}; up::AbstractVector=[0.0; 1.0; 0.0], rotation::Matrix{Float64}=I, scale::Float64=1.0)
    # Modelview matrix
    # Orientation
    v = normalize(at - cam)
@@ -68,7 +55,7 @@ function gl_image(window)
    # imshow(img, axes=(2,1), flipy=true)
 end
 
-function arcball_depth(v::SVector{2,Float64}, r::Float64=1.0)
+function arcball_depth(v::GVector{2}, r::Float64=1.0)
 	s_sqr = sum(v[1:2].^2)
 	(s_sqr <= 0.5*r^2) ? sqrt(r^2 - s_sqr) : (0.5*r^2) / sqrt(s_sqr)
 end
@@ -98,43 +85,42 @@ end
 
 mutable struct Renderer
 
-   width
-   height
-   window
-   program
-   object_vao
-   mesh_vbo
+	# Interface
+   width::Int
+   height::Int
+   window::GLFW.Window
+	arc_press::GVector{3}
+	arc_drag::Bool
+   mode::Render
+   opaque::Bool
 
-	points_vao
-   points_vbo
-   image_tx
-
+	# Viewing geometry
+	scale::Float64
+	clip::GVector{2}
+	fov::Float64
+	viewpoint::GVector{3}
+	target::GVector{3}
+	rotation::Matrix{Float64}
+	rotation_pre::Matrix{Float64}
+	
+	# OpenGL data
+   program::GLuint
+   object_vao::GLuint
+   mesh_vbo::GLuint
+	points_vao::GLuint
+   points_vbo::GLuint
+   image_tx::Vector{Int32}
    data::Array{GLuint,1}
    num_vertices::Int
    num_faces::Int
 	num_points::Int
 
-   rotation
-	rotation_pre
-
-   scale
-   clip
-   fov
-   viewpoint
-   target
-
-	arc_press::GVector{3}
-	arc_drag::Bool
-
-   mode::Render
-   opaque::Bool
-
    function Renderer(w, h; visible=true, title="Renderer")
 
       rend = new(w,h)
-      rend.rotation = I
-		rend.rotation_pre = I
-      rend.scale = 1
+      rend.rotation = I(3)
+		rend.rotation_pre = I(3)
+      rend.scale = 1.0
       rend.mode = colour
       rend.opaque = true
 
@@ -178,7 +164,7 @@ mutable struct Renderer
 
 		rend.arc_press = @SVector[0.0, 0.0, 0.0]
 		rend.arc_drag = false
-
+		compile!(rend)
       return rend
    end
 end
@@ -188,6 +174,7 @@ function compile!(rend::Renderer, vert_shader::String=vert_shader_default, frag_
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
    rend.program = createShaderProgram(vsh,fsh)
    glUseProgram(rend.program)
+	options!(rend)
 end
 
 function options!(rend::Renderer)
@@ -200,7 +187,7 @@ function options!(rend::Renderer)
    glEnable(GL_PROGRAM_POINT_SIZE)
 end
 
-function viewing!(rend::Renderer; scale, clip, fov, viewpoint, target)
+function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov::Float64, viewpoint::Vector{Float64}, target::Vector{Float64}=[0.0,0.0,0.0])
    rend.scale = scale
    rend.clip = clip
    rend.fov = fov
@@ -208,8 +195,7 @@ function viewing!(rend::Renderer; scale, clip, fov, viewpoint, target)
    rend.target = target
    glUniform1f(glGetUniformLocation(rend.program,"near"), GLfloat(rend.clip[1]))
    glUniform1f(glGetUniformLocation(rend.program,"far"), GLfloat(rend.clip[2]))
-   P = perspective(rend.clip, rend.fov, 1)
-   #display(P)
+   P = perspective(rend.clip, rend.fov, 1.0)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P[:]))
 end
 
@@ -271,7 +257,7 @@ function update!(rend::Renderer)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M[:]))
 end
 
-function execute!(rend::Renderer)
+function (rend::Renderer)()
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
 	# Key controls
@@ -315,7 +301,7 @@ function execute!(rend::Renderer)
 				v = arcball_vector(window)
 				t = angle(rend.arc_press, v)
 				n = cross(rend.arc_press, v)
-				# Compose differential rotation onto previous state
+				# Compose doubled differential rotation onto previous state
 				rend.rotation = rotation(2.0*t,n) * rend.rotation_pre
 			end
 		end)
@@ -323,7 +309,7 @@ function execute!(rend::Renderer)
 	GLFW.SetScrollCallback(rend.window,
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
-			rend.viewpoint[3] += y
+			rend.viewpoint = rend.viewpoint + [0.0, 0.0, y]
 		end)
 
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
@@ -338,8 +324,7 @@ function execute!(rend::Renderer)
    GLFW.DestroyWindow(rend.window)
 end
 
-
-function execute!(rend::Renderer, file::String, image_function=(depth)->depth)
+function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
