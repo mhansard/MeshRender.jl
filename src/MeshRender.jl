@@ -57,17 +57,17 @@ end
 
 """ Compute z-component of the generalized arcball vector.
 """
-function arcball_depth(v::GVector{2}, r::Float64=1.0)
-	s_sqr = sum(v[1:2].^2)
-	(s_sqr <= 0.5*r^2) ? sqrt(r^2 - s_sqr) : (0.5*r^2) / sqrt(s_sqr)
+function arcball_depth(v::GVector{2}, r1::Float64=1.0)
+	r_sqr = v[1]^2 + v[2]^2
+	(r_sqr <= 0.5*r1^2) ? sqrt(r1^2-r_sqr) : (0.5*r1^2)/sqrt(r_sqr)
 end
 
 """ Compute the generalized arcball vector. 
 """
 function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
 	# Center and radial 2D vector
-	c = (window_size .- 1) ./ 2.0
-	q = (cursor_pos .- c) ./ (min(window_size...)-1)
+	c = (window_size .- 1.0) ./ 2.0
+	q = (cursor_pos .- c) ./ (min(window_size...)-1.0)
 	# Radial 3D vector
 	GVector{3}(q[1], -q[2], arcball_depth(q))
 end
