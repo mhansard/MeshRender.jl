@@ -64,15 +64,12 @@ end
 
 """ Compute the generalized arcball vector. 
 """
-function arcball_vector(window::GLFW.Window)
-	# Window size and 2D cursor position
-	s = GVector{2}(GLFW.GetWindowSize(window)...)
-	p = GVector{2}(GLFW.GetCursorPos(window)...)
+function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
 	# Center and radial 2D vector
-	c = (s .- 1) ./ 2.0
-	q = (p .- c) ./ (min(s...)-1)
+	c = (window_size .- 1) ./ 2.0
+	q = (cursor_pos .- c) ./ (min(window_size...)-1)
 	# Radial 3D vector
-	GVector{3}([q[1], -q[2], arcball_depth(q)])
+	GVector{3}(q[1], -q[2], arcball_depth(q))
 end
 
 "Initialize GL vector from concatenated array"
@@ -177,7 +174,8 @@ end
 
 """ Compile and link shaders.
 """
-function compile!(rend::Renderer, vert_shader::String=vert_shader_default, frag_shader::String=frag_shader_default)
+function compile!(rend::Renderer; vert_shader::String=vert_shader_default, 
+	                               frag_shader::String=frag_shader_default)
    vsh = createShader(read(vert_shader,String), GL_VERTEX_SHADER)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
    rend.program = createShaderProgram(vsh,fsh)
@@ -187,11 +185,11 @@ end
 
 """ Set default options.
 """
-function options!(rend::Renderer)
-   bg = [211,215,207]/255
-   glClearColor(bg..., 1.0)
+function options!(rend::Renderer; background::AbstractVector=[211,215,207]/255, 
+	                               blend::Tuple{UInt32,UInt32}=(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA))
+   glClearColor(background..., 1.0)
    glEnable(GL_BLEND)
-   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+   glBlendFunc(blend...)
    glEnable(GL_DEPTH_TEST)
    glDepthFunc(GL_LESS)
    glEnable(GL_PROGRAM_POINT_SIZE)
@@ -199,7 +197,8 @@ end
 
 """ Set the viewing parameters.
 """
-function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov::Float64, viewpoint::Vector{Float64}, target::Vector{Float64}=[0.0,0.0,0.0])
+function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov::Float64,
+	                               viewpoint::Vector{Float64}, target::AbstractVector=[0.0,0.0,0.0])
    rend.scale = scale
    rend.clip = clip
    rend.fov = fov
@@ -309,7 +308,8 @@ function (rend::Renderer)()
 				if action == GLFW.PRESS
 					# Store rotation state & start new arc
 					rend.rotation_pre = rend.rotation
-					rend.arc_press = arcball_vector(window)
+					rend.arc_press = arcball_vector(GVector{2}(GLFW.GetWindowSize(window)...), 
+					                                GVector{2}(GLFW.GetCursorPos(window)...))
 				end
 			end
 		end)
@@ -319,7 +319,7 @@ function (rend::Renderer)()
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
 			if rend.arc_drag
-				v = arcball_vector(window)
+				v = arcball_vector(GVector{2}(GLFW.GetWindowSize(window)...), GVector{2}(x,y))
 				t = angle(rend.arc_press, v)
 				n = cross(rend.arc_press, v)
 				# Compose doubled differential rotation onto previous state
