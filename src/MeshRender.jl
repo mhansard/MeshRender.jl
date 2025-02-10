@@ -309,13 +309,14 @@ function (rend::Renderer)()
 		(window::GLFW.Window, button::GLFW.MouseButton, action::GLFW.Action, mods::Int32) ->
 		begin
 			if button == GLFW.MOUSE_BUTTON_LEFT
-				# Dragging either stopped or started
-				rend.arc_drag = !rend.arc_drag
 				if action == GLFW.PRESS
 					# Store rotation state & start new arc
 					rend.rotation_pre = rend.rotation
 					rend.arc_press = arcball_vector(GVector{2}(GLFW.GetWindowSize(window)...), 
 					                                GVector{2}(GLFW.GetCursorPos(window)...))
+					rend.arc_drag = true
+				elseif action == GLFW.RELEASE
+					rend.arc_drag = false
 				end
 			end
 		end)
@@ -347,6 +348,7 @@ function (rend::Renderer)()
 			P = perspective(rend.clip, rend.fov, w/h)
 			glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P))
 			glViewport(0,0,w,h)
+			rend.arc_drag = false
 		end)
 
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
