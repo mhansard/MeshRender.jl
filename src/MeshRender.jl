@@ -15,15 +15,15 @@ const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 """
 function perspective(limits, fov_v_deg::Float64, aspect::Float64=1.0)
    # Homogeneous perspective
-   f = 1/tan(radians(fov_v_deg)/2)
+   f = 1.0/tan(radians(fov_v_deg)/2.0)
    d = limits[2] - limits[1]
    cam = zeros(4,4)
    cam[1,1] = f / aspect
    cam[2,2] = f
    cam[3,3] = -sum(limits) / d
-   cam[3,4] = -2*prod(limits) / d
-   cam[4,3] = -1
-   cam[4,4] = 0
+   cam[3,4] = -2.0*prod(limits) / d
+   cam[4,3] = -1.0
+   cam[4,4] =  0.0
    cam
 end
 
@@ -73,8 +73,12 @@ function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
 end
 
 "Initialize GL vector from concatenated array"
-function gl_vec(M, gl_type=GLfloat)
+function __gl_vec(M, gl_type=GLfloat)
    Array{gl_type,1}(M[:])
+end
+
+function gl_vec(M, gl_type=GLfloat)
+   Array{gl_type,1}(vec(M))
 end
 
 "Initialize GL vector from concatenated array"
@@ -126,6 +130,7 @@ mutable struct Renderer
       rend.mode = colour
       rend.opaque = true
 
+		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
       GLFW.WindowHint(GLFW.VISIBLE, visible)
       if !visible
@@ -190,6 +195,7 @@ function options!(rend::Renderer; background::AbstractVector=[211,215,207]/255,
    glClearColor(background..., 1.0)
    glEnable(GL_BLEND)
    glBlendFunc(blend...)
+	glEnable(GL_MULTISAMPLE)
    glEnable(GL_DEPTH_TEST)
    glDepthFunc(GL_LESS)
    glEnable(GL_PROGRAM_POINT_SIZE)
@@ -207,7 +213,7 @@ function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov
    glUniform1f(glGetUniformLocation(rend.program,"near"), GLfloat(rend.clip[1]))
    glUniform1f(glGetUniformLocation(rend.program,"far"), GLfloat(rend.clip[2]))
    P = perspective(rend.clip, rend.fov, 1.0)
-   glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P[:]))
+   glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P))
 end
 
 """ Load data buffers for shaders.
@@ -270,7 +276,7 @@ end
 function update!(rend::Renderer) 
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
    M = modelview(rend.viewpoint, rend.target, rotation=rend.rotation, scale=rend.scale)
-   glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M[:]))
+   glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M))
 end
 
 """ Set interface callbacks and start the Renderer 
@@ -334,6 +340,15 @@ function (rend::Renderer)()
 			rend.viewpoint = rend.viewpoint + [0.0, 0.0, y]
 		end)
 
+	# Window resizing/reshaping
+  	GLFW.SetWindowSizeCallback(rend.window,
+	   (window::GLFW.Window, w::Int32, h::Int32) ->
+		begin
+			P = perspective(rend.clip, rend.fov, w/h)
+			glUniformMatrix4fv(glGetUniformLocation(rend.program,"projection"), 1, false, gl_vec(P))
+			glViewport(0,0,w,h)
+		end)
+
    glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
    glBindFramebuffer(GL_FRAMEBUFFER,0)
 
@@ -345,6 +360,7 @@ function (rend::Renderer)()
    end
    GLFW.DestroyWindow(rend.window)
 end
+
 
 function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
@@ -366,7 +382,7 @@ end
 
 ##################################
 
-function simulate_kinect(depth)
+function simulate_depthcam(depth)
    tmp = imresize(depth, (400,400), method=BSpline(Constant()))
    imresize(tmp, (1600,1600), method=BSpline(Constant()))
 end
