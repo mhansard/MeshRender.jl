@@ -3,7 +3,7 @@ module MeshRender
 using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry,
 Images, ImageTransformations, Interpolations
 
-export Renderer, compile!, options!, buffers!, viewing!
+export Renderer, options!, viewing!
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
@@ -13,15 +13,15 @@ const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
     field of view (degrees), and aspect ratio.
 """
-function perspective(limits, fov_v_deg::Float64, aspect::Float64=1.0)
+function perspective(clip::Tuple{Float64,Float64}, fov_v_deg::Float64, aspect::Float64=1.0)
    # Homogeneous perspective
    f = 1.0/tan(radians(fov_v_deg)/2.0)
-   d = limits[2] - limits[1]
+   d = clip[2] - clip[1]
    cam = zeros(4,4)
    cam[1,1] = f / aspect
    cam[2,2] = f
-   cam[3,3] = -sum(limits) / d
-   cam[3,4] = -2.0*prod(limits) / d
+   cam[3,3] = -sum(clip) / d
+   cam[3,4] = -2.0*prod(clip) / d
    cam[4,3] = -1.0
    cam[4,4] =  0.0
    cam
@@ -44,7 +44,7 @@ function modelview(cam::GVector{3}, at::GVector{3}; up::AbstractVector=[0.0; 1.0
    diagm([scale,scale,scale,1]) * M * [rotation zeros(3,1); [0 0 0 1]]
 end
 
-function gl_image(window)
+function gl_image(window::GLFW.Window)
    fb_size = GLFW.GetFramebufferSize(window)
    gl_data = gl_vec(Array{UInt8,1}(undef,prod(fb_size)*4), GLubyte)
    glPixelStorei(GL_PACK_ALIGNMENT, 4)
@@ -73,12 +73,12 @@ function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
 end
 
 "Initialize GL vector from concatenated array"
-function gl_vec(M, gl_type=GLfloat)
+function gl_vec(M::AbstractArray, gl_type::DataType=GLfloat)
    Array{gl_type,1}(vec(M))
 end
 
 "Initialize GL vector from concatenated array"
-function gl_ptr(n, gl_type=GLfloat)
+function gl_ptr(n::Int, gl_type::DataType=GLfloat)
    Ptr{Cvoid}(n*sizeof(gl_type))
 end
 
@@ -98,7 +98,7 @@ mutable struct Renderer
 
 	# Viewing geometry
 	scale::Float64
-	clip::GVector{2}
+	clip::Tuple{Float64,Float64}
 	fov::Float64
 	viewpoint::GVector{3}
 	target::GVector{3}
@@ -118,13 +118,22 @@ mutable struct Renderer
    data::Array{GLuint,1}
 	num_points::Int
 
-	# Constructor
-   function Renderer(win_size::Tuple{Int,Int}, V, F, N, C, P; 
-		               scale::Float64=1.0, clip=[0.1,30], 
-							fov::Float64=60.0, viewpoint=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+   @doc """
+       Renderer(window_size::Tuple{Int,Int}, V, F, N, C, P; 
+                scale::Float64=1.0, clip=[0.1,30], 
+                fov::Float64=60.0, viewpoint::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+                visible=true)
+
+   Construct a `Renderer`.
+	"""
+   function Renderer(window_size::Tuple{Int,Int}, 
+		               V::Vector{GVectors{3}}, F::Vector{IVectors{3}},
+							N::Vector{GVectors{3}}, C::Vector{GVectors{3}}, P::Vector{Vector{GVectors{3}}}; 
+		               scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
+							viewpoint::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							visible=true)
 
-      rend = new(win_size[1], win_size[2], (1,1))
+      rend = new(window_size[1], window_size[2], (1,1))
 
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
@@ -210,7 +219,7 @@ end
 
 """ Set the viewing parameters.
 """
-function viewing!(rend::Renderer, scale::Float64, clip::Vector{Float64}, fov::Float64,
+function viewing!(rend::Renderer, scale::Float64, clip::Tuple{Float64,Float64}, fov::Float64,
 	                               viewpoint::Vector{Float64}, target::AbstractVector)
    rend.scale = scale
    rend.clip = clip
@@ -233,8 +242,7 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 	# Merge data across all meshes
 	V, N, C, P = vcat(vertices...), vcat(normals...), vcat(colours...), vcat(points...)
 
-	println(typeof(faces[1]))
-	# Add offsets to indices of merged data
+	# Add offsets to indices before merging across meshes
 	F = map((f,n) -> f .+ [[n,n,n]], faces, [0; cumsum(length.(vertices))])
 	# Merge indices across all meshes
 	f = reduce(vcat,vcat(F...))
@@ -299,7 +307,7 @@ function update!(rend::Renderer)
    glUniformMatrix4fv(glGetUniformLocation(rend.program,"modelview"), 1, false, gl_vec(M))
 end
 
-""" Set interface callbacks and start the Renderer 
+""" Set interface callbacks and start the Renderer.
 """
 function (rend::Renderer)()
 	# Initalize as opaque
@@ -401,20 +409,17 @@ end
 
 function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
-   glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
+   glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(depth))
    glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
-
-   # Set first texture as target
-   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
-   # Re-render in the current mode
-   update!(rend)
+	update!(rend)
    render(rend)
 
-   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
-   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
+	img = gl_image(rend.window)
+
+	println("$(size(img)) x $(typeof(img))")
    println("depth range: $(extrema(Float64.(rend.data)))")
-   image = colorview(RGBA, normedview(reshape(rend.data, (4,rend.width,rend.height))))
-   save(file, image_function(image))
+
+   save(file, image_function(img))
 end
 
 ##################################
@@ -425,3 +430,25 @@ function simulate_depthcam(depth)
 end
 
 end
+
+
+
+#=
+
+
+   # Set first texture as target
+   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
+   # Re-render in the current mode
+   update!(rend)
+   render(rend)
+
+   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
+   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
+   println("depth range: $(extrema(Float64.(rend.data)))")
+
+	tmp = reshape(rend.data, (rend.width,rend.height,4))
+
+	println("$(size(tmp)) + $(typeof(tmp))")
+
+   image = gl_image(rend.window) #colorview(RGBA{N0f8}, rend.data)
+=#
