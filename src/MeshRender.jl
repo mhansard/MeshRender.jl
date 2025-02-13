@@ -30,9 +30,9 @@ end
 """ Construct modelview matrix from coordinates of camera, 
     target, and up-vector.
 """
-function modelview(cam::GVector{3}, at::GVector{3}; up::AbstractVector=[0.0; 1.0; 0.0], rotation::Matrix{Float64}=I, scale::Float64=1.0)
+function modelview(cam::GVector{3}, at::GVector{3}; up::AbstractVector=[0.0; 1.0; 0.0],
+	                rotation::Matrix{Float64}=I, scale::Float64=1.0)
    # Modelview matrix
-   # Orientation
    v = normalize(at - cam)
    n = normalize(cross(v,up))
    u = normalize(cross(n,v))
@@ -73,10 +73,6 @@ function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
 end
 
 "Initialize GL vector from concatenated array"
-function __gl_vec(M, gl_type=GLfloat)
-   Array{gl_type,1}(M[:])
-end
-
 function gl_vec(M, gl_type=GLfloat)
    Array{gl_type,1}(vec(M))
 end
@@ -90,9 +86,10 @@ end
 
 mutable struct Renderer
 
-	# Interface
-   width::Int
+	width::Int
    height::Int
+	select::Tuple{Int,Int}
+
    window::GLFW.Window
 	arc_press::GVector{3}
 	arc_drag::Bool
@@ -114,21 +111,20 @@ mutable struct Renderer
    mesh_vbo::GLuint
 	points_vao::GLuint
    points_vbo::GLuint
+	index_ranges::Vector{Tuple{Int32,Int32}}
+	point_ranges::Vector{Tuple{Int32,Int32}}
+
    image_tx::Vector{Int32}
    data::Array{GLuint,1}
-   num_vertices::Int
-   num_faces::Int
 	num_points::Int
 
 	# Constructor
-   function Renderer(w, h; visible=true, title="Renderer")
+   function Renderer(win_size::Tuple{Int,Int}, V, F, N, C, P; 
+		               scale::Float64=1.0, clip=[0.1,30], 
+							fov::Float64=60.0, viewpoint=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+							visible=true)
 
-      rend = new(w,h)
-      rend.rotation = I(3)
-		rend.rotation_pre = I(3)
-      rend.scale = 1.0
-      rend.mode = colour
-      rend.opaque = true
+      rend = new(win_size[1], win_size[2], (1,1))
 
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
@@ -136,15 +132,21 @@ mutable struct Renderer
       if !visible
          rend.data = Array{GLubyte,1}(undef, rend.width*rend.height*4)
       end
-      rend.window = GLFW.CreateWindow(rend.width, rend.height, title)
+      rend.window = GLFW.CreateWindow(rend.width, rend.height, "Rendering mesh range $(rend.select)")
       GLFW.MakeContextCurrent(rend.window)
       glViewport(0,0,rend.width,rend.height)
 
+		# Buffers for the merged data
       rend.object_vao = glGenVertexArray()
 		rend.points_vao = glGenVertexArray()
-
 		rend.mesh_vbo = glGenBuffer()
       rend.points_vbo = glGenBuffer()
+
+		# Per-mesh (start,end) indices for the merged vertex data 
+		K = cumsum(3*length.(F))
+		rend.index_ranges = collect(zip([1;K.+1], K))
+		K = cumsum(map(p -> sum(length.(p)), P))
+		rend.point_ranges = collect(zip([1;K.+1], K))
 
       image_fb = Array{GLint,1}(undef,1)
       glGenFramebuffers(1,pointer(image_fb))
@@ -165,14 +167,19 @@ mutable struct Renderer
       glDrawBuffers(1,pointer(draw_bf))
       status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
-
       # println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
       # dbits = []
       # print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
 
+		# Viewing state
+		rend.mode = colour
+      rend.opaque = true
 		rend.arc_press = @SVector[0.0, 0.0, 0.0]
 		rend.arc_drag = false
+
 		compile!(rend)
+		buffers!(rend, V,F,N,C,P)
+		viewing!(rend, scale, clip, fov, viewpoint, target)
       return rend
    end
 end
@@ -203,13 +210,16 @@ end
 
 """ Set the viewing parameters.
 """
-function viewing!(rend::Renderer; scale::Float64=1.0, clip::Vector{Float64}, fov::Float64,
-	                               viewpoint::Vector{Float64}, target::AbstractVector=[0.0,0.0,0.0])
+function viewing!(rend::Renderer, scale::Float64, clip::Vector{Float64}, fov::Float64,
+	                               viewpoint::Vector{Float64}, target::AbstractVector)
    rend.scale = scale
    rend.clip = clip
    rend.fov = fov
    rend.viewpoint = viewpoint
    rend.target = target
+	rend.rotation = I(3)
+	rend.rotation_pre = I(3)
+
    glUniform1f(glGetUniformLocation(rend.program,"near"), GLfloat(rend.clip[1]))
    glUniform1f(glGetUniformLocation(rend.program,"far"), GLfloat(rend.clip[2]))
    P = perspective(rend.clip, rend.fov, 1.0)
@@ -220,20 +230,29 @@ end
 """
 function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 
-   rend.num_vertices = length(vertices)
-   rend.num_faces = length(faces)
-   #data = gl_vec(vcat(vertices[:,faces[:]], 
-   #              repeat(normals,inner=[1,3]), 
-   #              repeat(colours,inner=[1,3]))[:])
+	# Merge data across all meshes
+	V, N, C, P = vcat(vertices...), vcat(normals...), vcat(colours...), vcat(points...)
 
-	data = gl_vec(vcat(stack(vertices[reduce(vcat,faces)]),
-	            stack(repeat(normals, inner=3)),  
-					stack(repeat(colours, inner=3))))
+	println(typeof(faces[1]))
+	# Add offsets to indices of merged data
+	F = map((f,n) -> f .+ [[n,n,n]], faces, [0; cumsum(length.(vertices))])
+	# Merge indices across all meshes
+	f = reduce(vcat,vcat(F...))
 
-   glBindVertexArray(rend.object_vao)
+	# Treat each v/n/c as a 3x1 column, and form a block array from the K meshes: 
+	#    V1 V2 ... VK
+	#    N1 N2 ... VK
+	#    C1 C2 ... VK
+	# Then vec the entire array, columnwise.
+
+	data = gl_vec(vcat(stack(V[f]), 
+	                   stack(repeat(N,inner=3)),
+							 stack(repeat(C,inner=3))))
+
+	glBindVertexArray(rend.object_vao)
    glBindBuffer(GL_ARRAY_BUFFER, rend.mesh_vbo)
    glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW)
-   stride = (3 + 3 + 3) * sizeof(GL_FLOAT)
+   stride = (3+3+3) * sizeof(GL_FLOAT)
    # vertices
    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, gl_ptr(0))
    glEnableVertexAttribArray(0)
@@ -245,29 +264,30 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
    glEnableVertexAttribArray(2)
 
 	### points
-	rend.num_points = mapreduce(length,+,points)
-	# println("loading $(rend.num_points) pts")
-	data_pts = gl_vec(reduce(vcat,reduce(vcat,points),init=[]))
-
+	rend.num_points = mapreduce(length,+,P)
+	data_pts = gl_vec(reduce(vcat,reduce(vcat,P),init=[]))
 	glBindVertexArray(rend.points_vao)
 	glBindBuffer(GL_ARRAY_BUFFER, rend.points_vbo)
    glBufferData(GL_ARRAY_BUFFER, sizeof(data_pts), data_pts, GL_STATIC_DRAW)
    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, gl_ptr(0))
    glEnableVertexAttribArray(3)
-
 end
 
 """ Render one frame.
 """
 function render(rend::Renderer)
    if rend.mode == colour || rend.mode == depth
-      glBindVertexArray(rend.object_vao)
-      glDrawArrays(GL_TRIANGLES, 0, 3*rend.num_faces)
+		k0 = first(rend.index_ranges[first(rend.select)])
+		k1 = last(rend.index_ranges[last(rend.select)])
+		glBindVertexArray(rend.object_vao)
+      glDrawArrays(GL_TRIANGLES, k0-1, k1-k0+1)
    end
 	###
 	if rend.mode == points
+		k0 = first(rend.point_ranges[first(rend.select)])
+		k1 = last(rend.point_ranges[last(rend.select)])
 		glBindVertexArray(rend.points_vao)
-		glDrawArrays(GL_POINTS, 0, 1*rend.num_points)
+		glDrawArrays(GL_POINTS, k0-1, k1-k0+1)
 	end
 end
 
@@ -300,8 +320,23 @@ function (rend::Renderer)()
 			elseif button == GLFW.KEY_O && action == GLFW.PRESS
 				rend.opaque = !rend.opaque
 				glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat((1.0+rend.opaque)/2.0))
+			elseif button == GLFW.KEY_LEFT && action == GLFW.PRESS
+				# Merge and decrement the indices
+				k = max(rend.select[1]-1, 1)
+				rend.select = (k,k)
+			elseif button == GLFW.KEY_RIGHT && action == GLFW.PRESS
+				# Merge and increment the indices
+				k = min(rend.select[1]+1, length(rend.index_ranges))
+				rend.select = (k,k)
+			elseif button == GLFW.KEY_UP && action == GLFW.PRESS
+				# Add subsequent mesh
+				rend.select = (rend.select[1], min(rend.select[2]+1, length(rend.index_ranges)))
+			elseif button == GLFW.KEY_DOWN && action == GLFW.PRESS
+				# Remove last mesh
+				rend.select = (rend.select[1], max(rend.select[2]-1, rend.select[1]))
 			end
 			glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
+			GLFW.SetWindowTitle(rend.window, "Rendering mesh range $(rend.select)")
    	end)
 
 	# Arcball button controls
