@@ -52,7 +52,7 @@ function gl_image(window::GLFW.Window)
    glReadPixels(0, 0, GLint(fb_size[1]), GLint(fb_size[2]), 
                 GL_RGBA, GL_UNSIGNED_BYTE, pointer(gl_data))
    colorview(RGBA, normedview(reshape(gl_data,(4,fb_size[1],fb_size[2]))))
-   # imshow(img, axes=(2,1), flipy=true)
+   imshow(img, axes=(2,1), flipy=true)
 end
 
 """ Compute z-component of the generalized arcball vector.
@@ -114,7 +114,7 @@ mutable struct Renderer
 	index_ranges::Vector{Tuple{Int32,Int32}}
 	point_ranges::Vector{Tuple{Int32,Int32}}
 
-   image_tx::Vector{Int32}
+   image_tx
    data::Array{GLuint,1}
 	num_points::Int
 
@@ -161,7 +161,7 @@ mutable struct Renderer
       glGenFramebuffers(1,pointer(image_fb))
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
 
-      rend.image_tx = Array{GLint,1}(undef,2)
+      rend.image_tx = Array{GLuint,1}(undef,2)
       glGenTextures(1,pointer(rend.image_tx,1))
       glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rend.width, rend.height, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_ptr(0))
@@ -289,9 +289,7 @@ function render(rend::Renderer)
 		k1 = last(rend.index_ranges[last(rend.select)])
 		glBindVertexArray(rend.object_vao)
       glDrawArrays(GL_TRIANGLES, k0-1, k1-k0+1)
-   end
-	###
-	if rend.mode == points
+	elseif rend.mode == points
 		k0 = first(rend.point_ranges[first(rend.select)])
 		k1 = last(rend.point_ranges[last(rend.select)])
 		glBindVertexArray(rend.points_vao)
@@ -409,17 +407,29 @@ end
 
 function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
-   glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(depth))
-   glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
-	update!(rend)
+
+   # Set first texture as target
+   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
+   #rend.mode = texture
+   update!(rend)
    render(rend)
 
-	img = gl_image(rend.window)
-
-	println("$(size(img)) x $(typeof(img))")
+   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
+   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
    println("depth range: $(extrema(Float64.(rend.data)))")
 
-   save(file, image_function(img))
+	tmp = reshape(rend.data, (4,rend.width,rend.height))
+
+	println("$(size(rend.data)) : $(typeof(rend.data)) --> $(size(tmp)) : $(typeof(tmp))")
+
+   img =  colorview(RGBA, normedview(N0f32,tmp))
+
+	show(img[1:10,1:10])
+
+	#println("$(size(img)) x $(typeof(img))")
+   #println("depth range: $(extrema(Float64.(rend.data)))")
+
+   save(file, img)
 end
 
 ##################################
