@@ -407,6 +407,36 @@ end
 
 function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
+	
+   glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
+   glUniform1f(glGetUniformLocation(rend.program,"opacity"), GLfloat(1.0))
+
+	# Set first texture as target
+   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
+   # Re-render in the current mode
+   update!(rend)
+   render(rend)
+
+   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
+   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
+   println("depth range: $(extrema(Float64.(rend.data)))")
+   image = colorview(RGBA, normedview(N0f32,reshape(rend.data, (4,rend.width,rend.height))))
+   save(file, image_function(image))
+
+end
+
+##################################
+
+function simulate_depthcam(depth)
+   tmp = imresize(depth, (400,400), method=BSpline(Constant()))
+   imresize(tmp, (1600,1600), method=BSpline(Constant()))
+end
+
+end
+
+
+
+#=
 
    # Set first texture as target
    glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
@@ -430,21 +460,8 @@ function (rend::Renderer)(file::String, image_function=(depth)->depth)
    #println("depth range: $(extrema(Float64.(rend.data)))")
 
    save(file, img)
-end
 
-##################################
-
-function simulate_depthcam(depth)
-   tmp = imresize(depth, (400,400), method=BSpline(Constant()))
-   imresize(tmp, (1600,1600), method=BSpline(Constant()))
-end
-
-end
-
-
-
-#=
-
+	======================
 
    # Set first texture as target
    glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
