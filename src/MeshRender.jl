@@ -77,14 +77,12 @@ function gl_vec(M::AbstractArray, gl_type::DataType=GLfloat)
    Array{gl_type,1}(vec(M))
 end
 
-"Initialize GL vector from concatenated array"
-function gl_ptr(n::Int, gl_type::DataType=GLfloat)
-   Ptr{Cvoid}(n*sizeof(gl_type))
+"Byte offset as multiple of type size"
+function ptr_offset(n::Int, T::DataType=GLfloat)
+   Ptr{Cvoid}(n * sizeof(T))
 end
 
 @enum Render colour=1 depth=2 points=3 texture=4
-
-fnc(id, str) = println(str)
 
 mutable struct Renderer
 
@@ -137,7 +135,6 @@ mutable struct Renderer
 
       rend = new(window_size[1], window_size[2], (1,1))
 
-		#GLFW.SetErrorCallback(fnc)
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
@@ -167,7 +164,7 @@ mutable struct Renderer
 		# Color buffer
       glGenTextures(1,pointer(rend.image_tx,1))
       glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rend.width, rend.height, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_ptr(0))
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rend.width, rend.height, 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -177,7 +174,7 @@ mutable struct Renderer
 		# Depth buffer
       glGenTextures(1,pointer(rend.image_tx,2))
       glBindTexture(GL_TEXTURE_2D, rend.image_tx[2])
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rend.width, rend.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, gl_ptr(0))
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rend.width, rend.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -278,13 +275,13 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
    glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW)
    stride = (3+3+3) * sizeof(GL_FLOAT)
    # vertices
-   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, gl_ptr(0))
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(0))
    glEnableVertexAttribArray(0)
    # normals
-   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, gl_ptr(3))
+   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(3))
    glEnableVertexAttribArray(1)
    # colours
-   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, gl_ptr(6))
+   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(6))
    glEnableVertexAttribArray(2)
 
 	### points
@@ -293,7 +290,7 @@ function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
 	glBindVertexArray(rend.points_vao)
 	glBindBuffer(GL_ARRAY_BUFFER, rend.points_vbo)
    glBufferData(GL_ARRAY_BUFFER, sizeof(data_pts), data_pts, GL_STATIC_DRAW)
-   glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, gl_ptr(0))
+   glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, ptr_offset(0))
    glEnableVertexAttribArray(3)
 end
 
@@ -447,7 +444,7 @@ function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
    image = colorview(RGBA, normedview(reshape(rend.data, (4,rend.width,rend.height))))
 
-   save(file, transpose(image)[end:-1:1,:])
+   save(file, transpose(image[:,end:-1:1]))
 
 	println("done")
 end
