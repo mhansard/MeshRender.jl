@@ -84,6 +84,8 @@ end
 
 @enum Render colour=1 depth=2 points=3 texture=4
 
+fnc(id, str) = println(str)
+
 mutable struct Renderer
 
 	width::Int
@@ -115,7 +117,7 @@ mutable struct Renderer
 	point_ranges::Vector{Tuple{Int32,Int32}}
 
    image_tx
-   data::Array{GLuint,1}
+   data
 	num_points::Int
 
    @doc """
@@ -135,6 +137,8 @@ mutable struct Renderer
 
       rend = new(window_size[1], window_size[2], (1,1))
 
+		GLFW.SetErrorCallback(fnc)
+		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
       GLFW.WindowHint(GLFW.VISIBLE, visible)
@@ -162,6 +166,8 @@ mutable struct Renderer
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
 
       rend.image_tx = Array{GLuint,1}(undef,2)
+
+		# Color buffer
       glGenTextures(1,pointer(rend.image_tx,1))
       glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rend.width, rend.height, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_ptr(0))
@@ -169,13 +175,25 @@ mutable struct Renderer
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rend.image_tx[1], 0)
 
-      glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, rend.image_tx[1], 0)
+		#=
+		# Depth buffer
+      glGenTextures(1,pointer(rend.image_tx,2))
+      glBindTexture(GL_TEXTURE_2D, rend.image_tx[2])
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, rend.width, rend.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, gl_ptr(0))
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, rend.image_tx[2], 0)
+=#
       draw_bf = Array{GLenum,1}(undef,1)
       draw_bf[1] = GL_COLOR_ATTACHMENT0
       glDrawBuffers(1,pointer(draw_bf))
       status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
+
       # println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
       # dbits = []
       # print("Depth bits: $(glGetIntegerv(GL_DEPTH_BITS, dbits))")
@@ -340,6 +358,8 @@ function (rend::Renderer)()
 			elseif button == GLFW.KEY_DOWN && action == GLFW.PRESS
 				# Remove last mesh
 				rend.select = (rend.select[1], max(rend.select[2]-1, rend.select[1]))
+			#elseif button == GLFW.KEY_I && action == GLFW.PRESS
+			#	rend("tmp.png")
 			end
 			glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
 			GLFW.SetWindowTitle(rend.window, "Rendering mesh range $(rend.select)")
@@ -420,7 +440,10 @@ function (rend::Renderer)(file::String, image_function=(depth)->depth)
    glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
    println("depth range: $(extrema(Float64.(rend.data)))")
-   image = colorview(RGBA, normedview(N0f32,reshape(rend.data, (4,rend.width,rend.height))))
+
+	println(typeof(rend.data))
+
+   image = colorview(RGBA, normedview(reshape(rend.data, (4,rend.width,rend.height))))
    save(file, image_function(image))
 
 end
