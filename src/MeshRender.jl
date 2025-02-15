@@ -137,14 +137,11 @@ mutable struct Renderer
 
       rend = new(window_size[1], window_size[2], (1,1))
 
-		GLFW.SetErrorCallback(fnc)
+		#GLFW.SetErrorCallback(fnc)
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT, GL_TRUE)
       GLFW.WindowHint(GLFW.VISIBLE, visible)
-      if !visible
-         rend.data = Array{GLubyte,1}(undef, rend.width*rend.height*4)
-      end
       rend.window = GLFW.CreateWindow(rend.width, rend.height, "Rendering mesh range $(rend.select)")
       GLFW.MakeContextCurrent(rend.window)
       glViewport(0,0,rend.width,rend.height)
@@ -177,7 +174,6 @@ mutable struct Renderer
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
       glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rend.image_tx[1], 0)
 
-		#=
 		# Depth buffer
       glGenTextures(1,pointer(rend.image_tx,2))
       glBindTexture(GL_TEXTURE_2D, rend.image_tx[2])
@@ -187,12 +183,14 @@ mutable struct Renderer
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, rend.image_tx[2], 0)
-=#
+
       draw_bf = Array{GLenum,1}(undef,1)
       draw_bf[1] = GL_COLOR_ATTACHMENT0
       glDrawBuffers(1,pointer(draw_bf))
       status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
       glBindFramebuffer(GL_FRAMEBUFFER, image_fb[1])
+
+		rend.data = Array{GLubyte,1}(undef, rend.width*rend.height*4)
 
       # println("Framebuffer ready: $(status_fb == GL_FRAMEBUFFER_COMPLETE)")
       # dbits = []
@@ -358,8 +356,8 @@ function (rend::Renderer)()
 			elseif button == GLFW.KEY_DOWN && action == GLFW.PRESS
 				# Remove last mesh
 				rend.select = (rend.select[1], max(rend.select[2]-1, rend.select[1]))
-			#elseif button == GLFW.KEY_I && action == GLFW.PRESS
-			#	rend("tmp.png")
+			elseif button == GLFW.KEY_I && action == GLFW.PRESS
+				rend("tmp.png")
 			end
 			glUniform1i(glGetUniformLocation(rend.program,"render_mode"), GLint(rend.mode))
 			GLFW.SetWindowTitle(rend.window, "Rendering mesh range $(rend.select)")
@@ -422,6 +420,7 @@ function (rend::Renderer)()
       GLFW.PollEvents()
    end
    GLFW.DestroyWindow(rend.window)
+	GLFW.Terminate()
 end
 
 
@@ -439,13 +438,18 @@ function (rend::Renderer)(file::String, image_function=(depth)->depth)
 
    glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
+
+	glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
    println("depth range: $(extrema(Float64.(rend.data)))")
 
 	println(typeof(rend.data))
 
    image = colorview(RGBA, normedview(reshape(rend.data, (4,rend.width,rend.height))))
-   save(file, image_function(image))
 
+   save(file, transpose(image)[end:-1:1,:])
+
+	println("done")
 end
 
 ##################################
@@ -457,48 +461,3 @@ end
 
 end
 
-
-
-#=
-
-   # Set first texture as target
-   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
-   #rend.mode = texture
-   update!(rend)
-   render(rend)
-
-   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
-   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
-   println("depth range: $(extrema(Float64.(rend.data)))")
-
-	tmp = reshape(rend.data, (4,rend.width,rend.height))
-
-	println("$(size(rend.data)) : $(typeof(rend.data)) --> $(size(tmp)) : $(typeof(tmp))")
-
-   img =  colorview(RGBA, normedview(N0f32,tmp))
-
-	show(img[1:10,1:10])
-
-	#println("$(size(img)) x $(typeof(img))")
-   #println("depth range: $(extrema(Float64.(rend.data)))")
-
-   save(file, img)
-
-	======================
-
-   # Set first texture as target
-   glBindFramebuffer(GL_FRAMEBUFFER, rend.image_tx[1])
-   # Re-render in the current mode
-   update!(rend)
-   render(rend)
-
-   glBindTexture(GL_TEXTURE_2D, rend.image_tx[1])
-   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.data))
-   println("depth range: $(extrema(Float64.(rend.data)))")
-
-	tmp = reshape(rend.data, (rend.width,rend.height,4))
-
-	println("$(size(tmp)) + $(typeof(tmp))")
-
-   image = gl_image(rend.window) #colorview(RGBA{N0f8}, rend.data)
-=#
