@@ -109,7 +109,9 @@ mutable struct GLData
 	index_ranges::Vector{Tuple{Int32,Int32}}
 	point_ranges::Vector{Tuple{Int32,Int32}}
 
-	function GLData(width_height)
+	function GLData(width_height::Tuple{Int,Int}, 
+		             vert_shader::String=vert_shader_default,
+						 frag_shader::String=frag_shader_default)
 		gl = new()
 
 		# Buffers for the merged data
@@ -150,7 +152,7 @@ mutable struct GLData
 		status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fb[1])
 		gl.data = Array{GLubyte,1}(undef, prod(width_height)*4)
-
+		compile!(gl, vert_shader, frag_shader)
 		return gl
 	end
 end
@@ -170,7 +172,7 @@ mutable struct ViewData
 	scale::Float64
 	clip::Tuple{Float64,Float64}
 	fov::Float64
-	viewpoint::GVector{3}
+	location::GVector{3}
 	target::GVector{3}
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
@@ -204,37 +206,33 @@ mutable struct Renderer <: AbstractRenderer
    @doc """
        Renderer(window_size::Tuple{Int,Int}, V, F, N, C, P; 
                 scale::Float64=1.0, clip=[0.1,30], 
-                fov::Float64=60.0, viewpoint::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+                fov::Float64=60.0, location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
                 visible=true)
 
    Construct a `PerFaceRenderer`.
 	"""
    function Renderer(window_size::Tuple{Int,Int}, 
 		               V::Vector{GVectors{3}}, F::Vector{IVectors{3}},
-							N::Vector{GVectors{3}}, C::Vector{GVectors{3}}, P::Vector{Vector{GVectors{3}}}; 
+							N::Vector{GVectors{3}}, C::Vector{GVectors{3}}, P::Vector{Vector{GVectors{3}}};
 		               scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
-							viewpoint::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+							location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							visible=true)
 
       rend = new(ViewData(window_size), GLData(window_size))
-		compile!(rend)
-		options!(rend)
 		buffers!(rend, V,F,N,C,P)
-		viewing!(rend; scale, clip, fov, viewpoint, target)
+		viewing!(rend; scale, clip, fov, location, target)
       return rend
    end
 end
 
 """ Compile and link shaders.
 """
-function compile!(rend::AbstractRenderer;
-	               vert_shader::String=vert_shader_default, 
-	               frag_shader::String=frag_shader_default)
-
+function compile!(gl::GLData, vert_shader::String, frag_shader::String)
    vsh = createShader(read(vert_shader,String), GL_VERTEX_SHADER)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
-   rend.gl.program = createShaderProgram(vsh,fsh)
-   glUseProgram(rend.gl.program)
+   gl.program = createShaderProgram(vsh,fsh)
+   glUseProgram(gl.program)
+	# Set default options
 	gl_check()
 end
 
@@ -257,12 +255,12 @@ end
 """
 function viewing!(rend::AbstractRenderer;
 	               scale::Float64, clip::Tuple{Float64,Float64}, fov::Float64,
-	               viewpoint::AbstractVector, target::AbstractVector)
+	               location::AbstractVector, target::AbstractVector)
 
    rend.view.scale = scale
    rend.view.clip = clip
    rend.view.fov = fov
-   rend.view.viewpoint = viewpoint
+   rend.view.location = location
    rend.view.target = target
 	rend.view.rotation = I(3)
 	rend.view.rotation_pre = I(3)
@@ -271,6 +269,8 @@ function viewing!(rend::AbstractRenderer;
    glUniform1f(glGetUniformLocation(rend.gl.program,"far"), GLfloat(rend.view.clip[2]))
    P = perspective(rend.view.clip, rend.view.fov, 1.0)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"projection"), 1, false, gl_vec(P))
+	# Set default options
+	options!(rend)
 end
 
 """ Load data buffers for shaders.
@@ -346,7 +346,7 @@ end
 """
 function update!(rend::AbstractRenderer) 
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-   M = modelview(rend.view.viewpoint, rend.view.target, rotation=rend.view.rotation, scale=rend.view.scale)
+   M = modelview(rend.view.location, rend.view.target, rotation=rend.view.rotation, scale=rend.view.scale)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"modelview"), 1, false, gl_vec(M))
 end
 
@@ -426,7 +426,7 @@ function (rend::AbstractRenderer)()
 	GLFW.SetScrollCallback(rend.view.window,
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
-			rend.view.viewpoint = rend.view.viewpoint + [0.0, 0.0, y]
+			rend.view.location = rend.view.location + [0.0, 0.0, y]
 		end)
 
 	# Window resizing/reshaping
@@ -441,8 +441,6 @@ function (rend::AbstractRenderer)()
 
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glBindFramebuffer(GL_FRAMEBUFFER,0)
-
-	println("starting")
 
    while !GLFW.WindowShouldClose(rend.view.window)
       update!(rend)
