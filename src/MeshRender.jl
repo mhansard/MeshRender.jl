@@ -3,7 +3,7 @@ module MeshRender
 using StaticArrays, GLFW, ModernGL, LinearAlgebra, FileIO, VisionGeometry,
 Images, ImageTransformations, Interpolations
 
-export Renderer, options!, viewing!
+export FlatRenderer, options!, viewing!
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
@@ -206,32 +206,33 @@ mutable struct ViewData
 	end
 end
 
-mutable struct Renderer <: AbstractRenderer
+mutable struct FlatRenderer <: AbstractRenderer
 
 	view::ViewData
 	gl::GLData
 
    @doc """
-       Renderer(window_size::Tuple{Int,Int}, V, F, N, C, P; 
-                scale::Float64=1.0, clip=[0.1,30], 
-                fov::Float64=60.0, location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-                visible=true)
+       FlatRenderer(window_size::Tuple{Int,Int}, F::Vector{IVectors{3}}, V::Vector{GVectors{3}},
+						  N::Vector{GVectors{3}}=nothing,
+						  C::Vector{GVectors{3}}=nothing, 
+						  P::Vector{Vector{GVectors{3}}}=nothing;
+		              scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
+						  location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+						  visible=true)
 
-   Construct a `PerFaceRenderer`.
+   Construct a `FlatRenderer`.
 	"""
-   function Renderer(window_size::Tuple{Int,Int}, 
-		               V::Vector{GVectors{3}}, F::Vector{IVectors{3}},
-							N::Vector{GVectors{3}}, C::Vector{GVectors{3}}, P::Vector{Vector{GVectors{3}}};
-		               scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
-							location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-							visible=true)
+   function FlatRenderer(window_size::Tuple{Int,Int}, F::Vector{IVectors{3}}, V::Vector{GVectors{3}},
+							    N::Vector{GVectors{3}}=nothing,
+							    C::Vector{GVectors{3}}=nothing, 
+							    P::Vector{Vector{GVectors{3}}}=nothing;
+		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
+							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+							    visible=true)
 
 		mesh_data = map((v,f,n,c) -> gl_vec(vcat(stack(v[reduce(vcat,f)]),
 					                                stack(repeat(n,inner=3)),
-					                                stack(repeat(c,inner=3))
-															  )), V,F,N,C)
-
-		#mesh_data = map((v,n,c) -> gl_vec(vcat(stack(v), stack(n), stack(c))), V,N,C)
+					                                stack(repeat(c,inner=3)))), V,F,N,C)
 
 		point_data = map(p -> gl_vec(reduce(hcat, stack.(p))), P)
 
@@ -334,7 +335,7 @@ end
 
 """ Render one frame.
 """
-function render(rend::Renderer)
+function render(rend::AbstractRenderer)
    if rend.view.mode == colour || rend.view.mode == depth
 		for k in range(rend.view.select...)
 			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
