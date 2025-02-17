@@ -1,6 +1,6 @@
 module MeshRender
 
-using StaticArrays, GLFW, ModernGL, LinearAlgebra, VisionGeometry,
+using StaticArrays, GLFW, ModernGL, LinearAlgebra, FileIO, VisionGeometry,
 Images, ImageTransformations, Interpolations
 
 export Renderer, options!, viewing!
@@ -93,32 +93,40 @@ abstract type AbstractRenderer end
 
 @enum Render colour=1 depth=2 points=3 texture=4
 
+struct GLBuffers
+	vao::GLuint
+	vbo::GLuint
+	ibo::GLuint
+	n::GLuint
+	function GLBuffers(n::Int)
+		new(glGenVertexArray(), glGenBuffer(), glGenBuffer(), n)
+	end
+end
+
 mutable struct GLData
 
 	program::GLuint
-	object_vao::GLuint
-	mesh_vbo::GLuint
-	points_vao::GLuint
-	points_vbo::GLuint
+	mesh_buffers::Vector{GLBuffers}
+	point_buffers::Vector{GLBuffers}
+
 	image_tx::Vector{GLuint}
 	image_fb::Vector{GLuint}
 	draw_bf::Vector{GLenum}
 	data::Vector{GLubyte}
 
-	# To be initialized by buffers!()
-	index_ranges::Vector{Tuple{Int32,Int32}}
-	point_ranges::Vector{Tuple{Int32,Int32}}
-
-	function GLData(width_height::Tuple{Int,Int}, 
+	function GLData(width_height::Tuple{Int,Int}, mesh_counts::Vector{Int}, point_counts::Vector{Int},
 		             vert_shader::String=vert_shader_default,
 						 frag_shader::String=frag_shader_default)
-		gl = new()
 
-		# Buffers for the merged data
-		gl.object_vao = glGenVertexArray()
-		gl.points_vao = glGenVertexArray()
-		gl.mesh_vbo = glGenBuffer()
-		gl.points_vbo = glGenBuffer()
+		gl = new(0, Vector{GLBuffers}(), Vector{GLBuffers}())
+
+		for m in mesh_counts
+			push!(gl.mesh_buffers, GLBuffers(m))
+		end
+
+		for n in point_counts
+			push!(gl.point_buffers, GLBuffers(n))
+		end
 
 		gl.image_fb = Array{GLuint,1}(undef,1)
 		glGenFramebuffers(1,pointer(gl.image_fb))
@@ -218,8 +226,23 @@ mutable struct Renderer <: AbstractRenderer
 							location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							visible=true)
 
-      rend = new(ViewData(window_size), GLData(window_size))
-		buffers!(rend, V,F,N,C,P)
+		mesh_data = map((v,f,n,c) -> gl_vec(vcat(stack(v[reduce(vcat,f)]),
+					                                stack(repeat(n,inner=3)),
+					                                stack(repeat(c,inner=3))
+															  )), V,F,N,C)
+
+		#mesh_data = map((v,n,c) -> gl_vec(vcat(stack(v), stack(n), stack(c))), V,N,C)
+
+		point_data = map(p -> gl_vec(reduce(hcat, stack.(p))), P)
+
+		vertex_counts = 3*length.(F)
+		point_counts = sum.(map(p->length.(p), P))
+
+      rend = new(ViewData(window_size), GLData(window_size, vertex_counts, point_counts))
+		
+		buffers!(rend.gl.mesh_buffers, [0,1,2], [3,3,3], mesh_data)
+		buffers!(rend.gl.point_buffers, [3], [3], point_data)
+
 		viewing!(rend; scale, clip, fov, location, target)
       return rend
    end
@@ -275,53 +298,36 @@ end
 
 """ Load data buffers for shaders.
 """
-function buffers!(rend::Renderer, vertices, faces, normals, colours, points)
-
-	# Merge data across all meshes
-	V, N, C, P = vcat(vertices...), vcat(normals...), vcat(colours...), vcat(points...)
-
-	# Add offsets to indices before merging across meshes
-	F = map((f,n) -> f .+ [[n,n,n]], faces, [0; cumsum(length.(vertices))])
-	# Merge indices across all meshes
-	f = reduce(vcat,vcat(F...))
+function buffers!(bufs::Vector{GLBuffers}, locs::Vector{Int}, lens::Vector{Int}, data, faces=nothing)
 
 	# Treat each v/n/c as a 3x1 column, and form a block array from the K meshes: 
 	#    V1 V2 ... VK
 	#    N1 N2 ... VK
 	#    C1 C2 ... VK
 	# Then vec the entire array, columnwise.
-	data = gl_vec(vcat(stack(V[f]), 
-	                   stack(repeat(N,inner=3)),
-							 stack(repeat(C,inner=3))))
 
-	glBindVertexArray(rend.gl.object_vao)
-   glBindBuffer(GL_ARRAY_BUFFER, rend.gl.mesh_vbo)
-   glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW)
+	for i in 1:length(bufs)
+		
+		glBindVertexArray(bufs[i].vao)
+		glBindBuffer(GL_ARRAY_BUFFER, bufs[i].vbo)
+		glBufferData(GL_ARRAY_BUFFER, sizeof(data[i]), data[i], GL_STATIC_DRAW)
 
-   stride = (3+3+3) * sizeof(GL_FLOAT)
-   # vertices
-   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(0))
-   glEnableVertexAttribArray(0)
-   # normals
-   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(3))
-   glEnableVertexAttribArray(1)
-   # colours
-   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, ptr_offset(6))
-   glEnableVertexAttribArray(2)
+		stride = sum(lens) * sizeof(GL_FLOAT)
+		offs = cumsum(lens) .- first(lens)
 
-	### points
-	pts_data = gl_vec(reduce(vcat,reduce(vcat,P),init=[]))
-	glBindVertexArray(rend.gl.points_vao)
-	glBindBuffer(GL_ARRAY_BUFFER, rend.gl.points_vbo)
-   glBufferData(GL_ARRAY_BUFFER, sizeof(pts_data), pts_data, GL_STATIC_DRAW)
-   glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 0, ptr_offset(0))
-   glEnableVertexAttribArray(3)
+		for j in 1:length(locs)
+			glVertexAttribPointer(locs[j], lens[j], GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
+			glEnableVertexAttribArray(locs[j])
+		end
 
-	# Per-mesh (start,end) indices for the merged vertex data 
-	K = cumsum(3*length.(faces))
-	rend.gl.index_ranges = collect(zip([1;K.+1], K))
-	K = cumsum(map(p -> sum(length.(p)), points))
-	rend.gl.point_ranges = collect(zip([1;K.+1], K))
+		if isnothing(faces)
+			indices = gl_vec(collect(0 : bufs[i].n-1), GLuint)
+		else
+			indices = reduce(vcat, faces[i])
+		end
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bufs[i].ibo)
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW)
+	end
 
 	gl_check()
 end
@@ -330,15 +336,19 @@ end
 """
 function render(rend::Renderer)
    if rend.view.mode == colour || rend.view.mode == depth
-		k0 = first(rend.gl.index_ranges[first(rend.view.select)])
-		k1 = last(rend.gl.index_ranges[last(rend.view.select)])
-		glBindVertexArray(rend.gl.object_vao)
-      glDrawArrays(GL_TRIANGLES, k0-1, k1-k0+1)
+		for k in range(rend.view.select...)
+			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.mesh_buffers[k].ibo)
+			glDrawElements(GL_TRIANGLES, rend.gl.mesh_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
+			#glDrawArrays(GL_TRIANGLES, 0, rend.gl.mesh_buffers[k].n)
+		end
 	elseif rend.view.mode == points
-		k0 = first(rend.gl.point_ranges[first(rend.view.select)])
-		k1 = last(rend.gl.point_ranges[last(rend.view.select)])
-		glBindVertexArray(rend.gl.points_vao)
-		glDrawArrays(GL_POINTS, k0-1, k1-k0+1)
+		for k in range(rend.view.select...)
+			glBindVertexArray(rend.gl.point_buffers[k].vao)
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.point_buffers[k].ibo)
+			glDrawElements(GL_POINTS, rend.gl.point_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
+			#glDrawArrays(GL_POINTS, 0, rend.gl.point_buffers[k].n)
+		end
 	end
 end
 
@@ -377,11 +387,11 @@ function (rend::AbstractRenderer)()
 				rend.view.select = (k,k)
 			elseif button == GLFW.KEY_RIGHT && action == GLFW.PRESS
 				# Merge and increment the indices
-				k = min(rend.view.select[1]+1, length(rend.gl.index_ranges))
+				k = min(rend.view.select[1]+1, length(rend.gl.mesh_buffers))
 				rend.view.select = (k,k)
 			elseif button == GLFW.KEY_UP && action == GLFW.PRESS
 				# Add subsequent mesh
-				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.index_ranges)))
+				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.mesh_buffers)))
 			elseif button == GLFW.KEY_DOWN && action == GLFW.PRESS
 				# Remove last mesh
 				rend.view.select = (rend.view.select[1], max(rend.view.select[2]-1, rend.view.select[1]))
@@ -484,5 +494,12 @@ function simulate_depthcam(depth)
    imresize(tmp, (1600,1600), method=BSpline(Constant()))
 end
 
+
+function test_obj(name::String)
+	obj = load(name)
+	faces = IVector{3}.(SVector{3}.(obj.faces))
+	vertices = SVector{3}.(obj.position)
 end
 
+
+end
