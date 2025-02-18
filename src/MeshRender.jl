@@ -225,7 +225,7 @@ mutable struct FlatRenderer <: AbstractRenderer
    function FlatRenderer(window_size::Tuple{Int,Int}, F::Vector{IVectors{3}}, V::Vector{GVectors{3}},
 							    N::Vector{GVectors{3}}=nothing,
 							    C::Vector{GVectors{3}}=nothing, 
-							    P::Vector{Vector{GVectors{3}}}=nothing;
+							    P::Vector{GVectors{3}}=nothing;
 		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
 							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							    visible=true)
@@ -233,18 +233,14 @@ mutable struct FlatRenderer <: AbstractRenderer
 		mesh_data = map((v,f,n,c) -> gl_vec(vcat(stack(v[reduce(vcat,f)]),
 					                                stack(repeat(n,inner=3)),
 					                                stack(repeat(c,inner=3)))), V,F,N,C)
+		point_data = gl_vec.(stack.(P))
 
-		point_data = map(p -> gl_vec(reduce(hcat, stack.(p))), P)
-
-		vertex_counts = 3*length.(F)
-		point_counts = sum.(map(p->length.(p), P))
-
-      rend = new(ViewData(window_size), GLData(window_size, vertex_counts, point_counts))
+      rend = new(ViewData(window_size), GLData(window_size, 3*length.(F), length.(P)))
 		
-		buffers!(rend.gl.mesh_buffers, [0,1,2], [3,3,3], mesh_data)
-		buffers!(rend.gl.point_buffers, [3], [3], point_data)
-
+		buffers!(rend.gl.mesh_buffers, mesh_data, layout=[(0,3),(1,3),(2,3)])
+		buffers!(rend.gl.point_buffers, point_data, layout=[(3,3)])
 		viewing!(rend; scale, clip, fov, location, target)
+		options!(rend)
       return rend
    end
 end
@@ -256,7 +252,6 @@ function compile!(gl::GLData, vert_shader::String, frag_shader::String)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
    gl.program = createShaderProgram(vsh,fsh)
    glUseProgram(gl.program)
-	# Set default options
 	gl_check()
 end
 
@@ -293,13 +288,11 @@ function viewing!(rend::AbstractRenderer;
    glUniform1f(glGetUniformLocation(rend.gl.program,"far"), GLfloat(rend.view.clip[2]))
    P = perspective(rend.view.clip, rend.view.fov, 1.0)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"projection"), 1, false, gl_vec(P))
-	# Set default options
-	options!(rend)
 end
 
 """ Load data buffers for shaders.
 """
-function buffers!(bufs::Vector{GLBuffers}, locs::Vector{Int}, lens::Vector{Int}, data, faces=nothing)
+function buffers!(bufs::Vector{GLBuffers}, data; layout::Vector{Tuple{Int,Int}}, faces=nothing)
 
 	# Treat each v/n/c as a 3x1 column, and form a block array from the K meshes: 
 	#    V1 V2 ... VK
@@ -313,12 +306,13 @@ function buffers!(bufs::Vector{GLBuffers}, locs::Vector{Int}, lens::Vector{Int},
 		glBindBuffer(GL_ARRAY_BUFFER, bufs[i].vbo)
 		glBufferData(GL_ARRAY_BUFFER, sizeof(data[i]), data[i], GL_STATIC_DRAW)
 
-		stride = sum(lens) * sizeof(GL_FLOAT)
-		offs = cumsum(lens) .- first(lens)
+		sizes = last.(layout)
+		stride = sum(sizes) * sizeof(GL_FLOAT)
+		offs = cumsum(sizes) .- first(sizes)
 
-		for j in 1:length(locs)
-			glVertexAttribPointer(locs[j], lens[j], GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
-			glEnableVertexAttribArray(locs[j])
+		for j in 1:length(layout)
+			glVertexAttribPointer(layout[j]..., GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
+			glEnableVertexAttribArray(first(layout[j]))
 		end
 
 		if isnothing(faces)
