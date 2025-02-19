@@ -4,7 +4,7 @@ layout(location=0) in vec3 vertex;
 layout(location=1) in vec3 normal;
 layout(location=2) in vec3 colour;
 layout(location=3) in vec3 point;
-layout(location=4) in vec2 texcoord;
+layout(location=4) in vec2 corner;
 
 uniform mat4 modelview, projection;
 uniform int render_mode;
@@ -37,9 +37,7 @@ void main()
         c = vec4(0.0);
     }
     else if(render_mode == 4) {
-		  gl_Position = projection * modelview * vec4(vertex,1.0);
-		  map = texcoord;
-        //gl_Position = vec4(corner.x, corner.y, 0.0, 1.0); 
-        //map = (vec2(1.0,1.0) + corner) / 2.0;    
+        gl_Position = vec4(corner.x, corner.y, 0.0, 1.0); 
+        map = (vec2(1.0,1.0) + corner) / 2.0;    
     }
 }
