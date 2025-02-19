@@ -1,9 +1,11 @@
 module MeshRender
 
-using StaticArrays, GLFW, ModernGL, LinearAlgebra, FileIO, VisionGeometry,
-Images, ImageTransformations, Interpolations
+using StaticArrays, LinearAlgebra, GLFW, ModernGL, FileIO, VisionGeometry,
+Images, Colors, ImageTransformations, Interpolations
 
-export FlatRenderer, options!, viewing!
+import GeometryBasics
+
+export FlatRenderer, viewing!
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
@@ -97,9 +99,10 @@ struct GLBuffers
 	vao::GLuint
 	vbo::GLuint
 	ibo::GLuint
+	tex::GLuint
 	n::GLuint
 	function GLBuffers(n::Int)
-		new(glGenVertexArray(), glGenBuffer(), glGenBuffer(), n)
+		new(glGenVertexArray(), glGenBuffer(), glGenBuffer(), glGenTexture(), n)
 	end
 end
 
@@ -114,7 +117,7 @@ mutable struct GLData
 	draw_bf::Vector{GLenum}
 	data::Vector{GLubyte}
 
-	function GLData(width_height::Tuple{Int,Int}, mesh_counts::Vector{Int}, point_counts::Vector{Int},
+	function GLData(width_height::Tuple{Int,Int}, mesh_counts::Vector{Int}=[], point_counts::Vector{Int}=[],
 		             vert_shader::String=vert_shader_default,
 						 frag_shader::String=frag_shader_default)
 
@@ -160,6 +163,7 @@ mutable struct GLData
 		status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fb[1])
 		gl.data = Array{GLubyte,1}(undef, prod(width_height)*4)
+		
 		compile!(gl, vert_shader, frag_shader)
 		return gl
 	end
@@ -197,7 +201,7 @@ mutable struct ViewData
       glViewport(0,0,view.width,view.height)
 
 		# Viewing state
-		view.mode = colour
+		view.mode = texture # colour ############################################################
       view.opaque = true
 		view.arc_press = @SVector[0.0, 0.0, 0.0]
 		view.arc_drag = false
@@ -206,41 +210,82 @@ mutable struct ViewData
 	end
 end
 
+
+mutable struct Renderer <: AbstractRenderer
+
+	view::ViewData
+	gl::GLData
+
+   @doc """
+   Construct a `Renderer`.
+	"""
+   function Renderer(window_size::Tuple{Int,Int}, faces::Vector{IVectors{3}}, vertices::Vector{GVectors{3}};
+							    normals::Vector{GVectors{3}}=nothing,
+								 texmaps::Vector{GVectors{2}}=nothing,
+								 teximgs=nothing,
+		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
+							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
+							    visible=true)
+
+
+		mesh_data = map((F,V,N,T) -> attrib_matrix(F,[V,T]), faces, vertices, normals, texmaps)
+
+		display(mesh_data[1])
+
+		println("T: $(typeof(teximgs[1])) : $(size(teximgs[1]))")
+
+		inds = map(f -> f.-1, reduce.(vcat,faces))
+
+		vsh = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
+		fsh = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
+
+      rend = new(ViewData(window_size), GLData(window_size, 3*length.(faces), Int64[], vsh, fsh))
+		
+		buffers!(rend.gl.mesh_buffers, gl_vec.(mesh_data); layout=[(0,3),(4,2)], indices=gl_vec.(inds,GLuint), texmaps, teximgs) 
+
+		gl_check()
+
+		viewing!(rend; scale, clip, fov, location, target)
+      return rend
+   end
+end
+
+
+
 mutable struct FlatRenderer <: AbstractRenderer
 
 	view::ViewData
 	gl::GLData
 
    @doc """
-       FlatRenderer(window_size::Tuple{Int,Int}, F::Vector{IVectors{3}}, V::Vector{GVectors{3}},
-						  N::Vector{GVectors{3}}=nothing,
-						  C::Vector{GVectors{3}}=nothing, 
-						  P::Vector{Vector{GVectors{3}}}=nothing;
-		              scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
-						  location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-						  visible=true)
-
    Construct a `FlatRenderer`.
 	"""
-   function FlatRenderer(window_size::Tuple{Int,Int}, F::Vector{IVectors{3}}, V::Vector{GVectors{3}},
-							    N::Vector{GVectors{3}}=nothing,
-							    C::Vector{GVectors{3}}=nothing, 
-							    P::Vector{GVectors{3}}=nothing;
+   function FlatRenderer(window_size::Tuple{Int,Int}, faces::Vector{IVectors{3}}, vertices::Vector{GVectors{3}};
+							    normals::Vector{GVectors{3}}=nothing,
+							    colours::Vector{GVectors{3}}=nothing,
+							    points::Vector{GVectors{3}}=nothing,
 		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
 							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							    visible=true)
 
-		mesh_data = map((v,f,n,c) -> gl_vec(vcat(stack(v[reduce(vcat,f)]),
-					                                stack(repeat(n,inner=3)),
-					                                stack(repeat(c,inner=3)))), V,F,N,C)
-		point_data = gl_vec.(stack.(P))
+		mesh_data = map((F,V,N,C) -> gl_vec(vcat(stack(V[reduce(vcat,F)]),
+		                                         stack(repeat(N,inner=3)),
+					                                stack(repeat(C,inner=3)))), faces, vertices, normals, colours)
 
-      rend = new(ViewData(window_size), GLData(window_size, 3*length.(F), length.(P)))
+									display(mesh_data)
+
+		point_data = stack.(points)
+
+		vsh = pkgdir(@__MODULE__, "src", "FlatVert.glsl")
+		fsh = pkgdir(@__MODULE__, "src", "FlatFrag.glsl")
+
+      rend = new(ViewData(window_size), GLData(window_size, 3*length.(faces), length.(points), vsh, fsh))
 		
-		buffers!(rend.gl.mesh_buffers, mesh_data, layout=[(0,3),(1,3),(2,3)])
-		buffers!(rend.gl.point_buffers, point_data, layout=[(3,3)])
+		buffers!(rend.gl.mesh_buffers, mesh_data; layout=[(0,3),(1,3),(2,3)])
+
+		buffers!(rend.gl.point_buffers, gl_vec.(point_data); layout=[(3,3)])
+		
 		viewing!(rend; scale, clip, fov, location, target)
-		options!(rend)
       return rend
    end
 end
@@ -292,7 +337,7 @@ end
 
 """ Load data buffers for shaders.
 """
-function buffers!(bufs::Vector{GLBuffers}, data; layout::Vector{Tuple{Int,Int}}, faces=nothing)
+function buffers!(bufs::Vector{GLBuffers}, data::Vector{Vector{GLfloat}}; layout::Vector{Tuple{Int,Int}}, indices=nothing, texmaps=nothing, teximgs=nothing)
 
 	# Treat each v/n/c as a 3x1 column, and form a block array from the K meshes: 
 	#    V1 V2 ... VK
@@ -307,21 +352,42 @@ function buffers!(bufs::Vector{GLBuffers}, data; layout::Vector{Tuple{Int,Int}},
 		glBufferData(GL_ARRAY_BUFFER, sizeof(data[i]), data[i], GL_STATIC_DRAW)
 
 		sizes = last.(layout)
-		stride = sum(sizes) * sizeof(GL_FLOAT)
+		stride = GLsizei.(sum(sizes) * sizeof(GLfloat))
 		offs = cumsum(sizes) .- first(sizes)
 
+		println("locations: $(first.(layout))")
+		println("sizes: $(sizes)")
+		println("strides: $(stride)")
+		println("offs: $(offs)")
+
 		for j in 1:length(layout)
-			glVertexAttribPointer(layout[j]..., GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
+			glVertexAttribPointer(layout[j][1], layout[j][2], GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
 			glEnableVertexAttribArray(first(layout[j]))
 		end
 
-		if isnothing(faces)
-			indices = gl_vec(collect(0 : bufs[i].n-1), GLuint)
+		if isnothing(indices)
+			ind = gl_vec(collect(0 : bufs[i].n-1), GLuint)
 		else
-			indices = reduce(vcat, faces[i])
+			ind = indices[i]
 		end
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bufs[i].ibo)
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW)
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(ind), ind, GL_STATIC_DRAW)
+
+		if !isnothing(texmaps)
+
+			println("loading texture")
+
+			glActiveTexture(GL_TEXTURE0)
+
+			glBindTexture(GL_TEXTURE_2D, bufs[i].tex)
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1024, 1024, 0, GL_RGB, GL_UNSIGNED_BYTE, teximgs[i])
+
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+
+		end
 	end
 
 	gl_check()
@@ -330,8 +396,12 @@ end
 """ Render one frame.
 """
 function render(rend::AbstractRenderer)
-   if rend.view.mode == colour || rend.view.mode == depth
+   if rend.view.mode == colour || rend.view.mode == depth || rend.view.mode == texture
+
+		glUniform1i(glGetUniformLocation(rend.gl.program,"image"), 0)
+
 		for k in range(rend.view.select...)
+			#println("rendering $(rend.gl.mesh_buffers[k].n)")
 			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.mesh_buffers[k].ibo)
 			glDrawElements(GL_TRIANGLES, rend.gl.mesh_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
@@ -345,6 +415,7 @@ function render(rend::AbstractRenderer)
 			#glDrawArrays(GL_POINTS, 0, rend.gl.point_buffers[k].n)
 		end
 	end
+	#gl_check()
 end
 
 """ Update viewing geometry.
@@ -357,7 +428,10 @@ end
 
 """ Set interface callbacks and start the Renderer.
 """
-function (rend::AbstractRenderer)()
+function (rend::AbstractRenderer)(; opts...)
+
+	options!(rend; opts...)
+
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
 
@@ -367,31 +441,43 @@ function (rend::AbstractRenderer)()
 		begin
 			if button == GLFW.KEY_ESCAPE
 				GLFW.SetWindowShouldClose(rend.view.window,true)
+			
 			elseif button == GLFW.KEY_C && action == GLFW.PRESS
 				rend.view.mode = colour
+			
+			elseif button == GLFW.KEY_T && action == GLFW.PRESS
+				rend.view.mode = texture
+
 			elseif button == GLFW.KEY_D && action == GLFW.PRESS
 				rend.view.mode = depth
+			
 			elseif button == GLFW.KEY_P && action == GLFW.PRESS
 				rend.view.mode = points
+			
 			elseif button == GLFW.KEY_O && action == GLFW.PRESS
 				rend.view.opaque = !rend.view.opaque
 				glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat((1.0+rend.view.opaque)/2.0))
-			elseif button == GLFW.KEY_LEFT && action == GLFW.PRESS
-				# Merge and decrement the indices
-				k = max(rend.view.select[1]-1, 1)
-				rend.view.select = (k,k)
-			elseif button == GLFW.KEY_RIGHT && action == GLFW.PRESS
+
+			elseif mods == GLFW.MOD_SHIFT && button == GLFW.KEY_TAB && action == GLFW.PRESS
+				# Add subsequent mesh
+				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.mesh_buffers)))
+		
+			elseif mods == GLFW.MOD_SHIFT && button == GLFW.KEY_BACKSPACE && action == GLFW.PRESS
+				# Remove last mesh
+				rend.view.select = (rend.view.select[1], max(rend.view.select[2]-1, rend.view.select[1]))
+			
+			elseif button == GLFW.KEY_TAB && action == GLFW.PRESS
 				# Merge and increment the indices
 				k = min(rend.view.select[1]+1, length(rend.gl.mesh_buffers))
 				rend.view.select = (k,k)
-			elseif button == GLFW.KEY_UP && action == GLFW.PRESS
-				# Add subsequent mesh
-				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.mesh_buffers)))
-			elseif button == GLFW.KEY_DOWN && action == GLFW.PRESS
-				# Remove last mesh
-				rend.view.select = (rend.view.select[1], max(rend.view.select[2]-1, rend.view.select[1]))
+
+			elseif button == GLFW.KEY_BACKSPACE && action == GLFW.PRESS
+				# Merge and decrement the indices
+				k = max(rend.view.select[1]-1, 1)
+				rend.view.select = (k,k)
+			
 			elseif button == GLFW.KEY_I && action == GLFW.PRESS
-				rend("tmp.png")
+				rend("meshrender.png"; opts...)
 			end
 			glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
 			GLFW.SetWindowTitle(rend.view.window, "Rendering mesh range $(rend.view.select)")
@@ -458,7 +544,9 @@ function (rend::AbstractRenderer)()
 end
 
 
-function (rend::AbstractRenderer)(file::String, image_function=(depth)->depth)
+function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
+
+	options!(rend; opts...)
 	
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -489,11 +577,43 @@ function simulate_depthcam(depth)
    imresize(tmp, (1600,1600), method=BSpline(Constant()))
 end
 
+function attrib_matrix(indices::AbstractArray, attribs::AbstractArray)
+	# Flatten indices and remove duplicates
+	J = unique(reduce(vcat,indices))
 
-function test_obj(name::String)
-	obj = load(name)
-	faces = IVector{3}.(SVector{3}.(obj.faces))
-	vertices = SVector{3}.(obj.position)
+	# Length of concatenated arributes 
+	m = sum(length.(first.(attribs)))
+
+	# Raw matrix to hold attributes in columns
+	A = Array{Float64}(undef, m, maximum(J))
+
+	println("Constructed $(size(A)) attribute array")
+
+	# Assignment
+	A[:,J] .= stack(vcat.(map(a->a[J],attribs)...))
+end
+
+function test_obj()
+
+	#using FileIO, GeometryBasics, VisionGeometry, MeshRender
+
+	obj_name = "spot/model.obj"
+	tex_name = "spot/texture.png"
+
+	obj = load(obj_name)
+	F = SVector{3,Int}.(GeometryBasics.faces(obj))
+	V = SVector{3,Float64}.(GeometryBasics.coordinates(obj))
+	N = SVector{3,Float64}.(GeometryBasics.normals(obj))
+	#TM = SVector{2,Float64}.(GeometryBasics.values(GeometryBasics.decompose_uv(obj)))
+	TM = SVector{2,Float64}.(GeometryBasics.values(GeometryBasics.texturecoordinates(obj)))
+
+	TI = load(tex_name)
+
+	TI_raw = copy(reinterpret(UInt8, TI[end:-1:1,:]))
+
+   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI_raw])
+	rend()
+
 end
 
 
