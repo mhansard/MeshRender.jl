@@ -30,7 +30,7 @@ void main()
         z = (modelview * vec4(vertex,1.0)).z;
         s = normalize(light - vertex.xyz);
         n = normalize((modelview * vec4(normal,0.0)).xyz);
-        c vec4(0.0);///= vec4(colour.rgb, 1.0);
+        c = vec4(0.0);///= vec4(colour.rgb, 1.0);
     }
     else if(render_mode == 3) {
         gl_Position = vec4(0.0);///projection * modelview * vec4(point,1.0);
