@@ -1,6 +1,6 @@
 #version 400 
 
-//precision highp float;
+precision highp float;
 uniform int render_mode;
 uniform float near, far;
 
@@ -9,7 +9,7 @@ uniform float opacity;
 
 in highp vec3 s, n;
 in mediump vec4 c;
-in vec2 map;
+in highp vec2 map;
 in float z;
 
 //out mediump vec4 colour;
@@ -42,6 +42,6 @@ void main()
       colour = vec4(vec3(0.0), 1.0);
    }
    else if(render_mode == 4) {
-      colour = vec4(texture(image, map.st).rgb, 1.0);
+		colour = vec4(texture(image, vec2(1.0-map.t,map.s)).rgb, 1.0);
    }
 }
