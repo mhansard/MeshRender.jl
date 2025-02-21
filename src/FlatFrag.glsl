@@ -39,9 +39,6 @@ void main()
          colour = vec4(vec3(c), 1.0);
    }
    else if(render_mode == 3) {
-      colour = vec4(vec3(0.0), 1.0);
-   }
-   else if(render_mode == 4) {
-      colour = vec4(vec3(0.0,0.0,0.0) + texture(image, map).rgb, 1.0);
+      colour = vec4(vec3(0.2), 1.0);
    }
 }

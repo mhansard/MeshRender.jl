@@ -42,6 +42,6 @@ void main()
       colour = vec4(vec3(0.0), 1.0);
    }
    else if(render_mode == 4) {
-		colour = vec4(texture(image, vec2(1.0-map.t,map.s)).rgb, 1.0);
+		colour = vec4(texture(image,map).rgb, 1.0);
    }
 }

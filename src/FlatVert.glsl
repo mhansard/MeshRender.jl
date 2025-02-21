@@ -36,8 +36,4 @@ void main()
         n = vec3(0.0);
         c = vec4(0.0);
     }
-    else if(render_mode == 4) {
-        gl_Position = vec4(corner.x, corner.y, 0.0, 1.0); 
-        map = (vec2(1.0,1.0) + corner) / 2.0;    
-    }
 }

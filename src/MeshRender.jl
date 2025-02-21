@@ -237,13 +237,6 @@ mutable struct Renderer <: AbstractRenderer
 			vertices = map(V -> scale*(V.-[mean(V)]), vertices)
 		end
 
-		println(typeof([(0,vertices),(1,normals),(2,texmaps)]))
-		println(typeof(vertices))
-		println(typeof(normals))
-		println(typeof(texmaps))
-		println(typeof(faces))
-
-
 		buffers!(rend.gl.mesh_buffers, [(0,vertices),(1,normals),(2,texmaps)]; faces, teximgs) 
 		viewing!(rend; scale, clip, fov, location, target)
 		gl_check()
@@ -276,10 +269,7 @@ mutable struct FlatRenderer <: AbstractRenderer
 		all_normals = repeat.(normals,inner=3)
 		all_colours = repeat.(colours,inner=3)
 
-		println(typeof([(3,all_vertices)]))
-		println(typeof([(3,points)]))
-
-		buffers!(rend.gl.mesh_buffers, [(0,all_vertices),(1,all_normals),(2,all_colours)]; )
+		buffers!(rend.gl.mesh_buffers, [(0,all_vertices),(1,all_normals),(2,all_colours)])
 		buffers!(rend.gl.point_buffers, [(3,points)]; )
 		
 		viewing!(rend; scale, clip, fov, location, target)
@@ -369,7 +359,8 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 
 		# Textures
 		if !isnothing(teximgs)
-			img = reinterpret(GLubyte,teximgs[i])
+			# Flip and cast image.
+			img = reinterpret(GLubyte, transpose(teximgs[i][end:-1:1,:]))
 			num_channels = length(teximgs[i][1])
 			if num_channels == 3
 				fmt = GL_RGB
@@ -601,8 +592,8 @@ function test_obj()
 
 	#using FileIO, GeometryBasics, VisionGeometry, MeshRender
 
-	obj_name = "banana/model.obj"
-	tex_name = "banana/texture.png"
+	obj_name = "spot/model.obj"
+	tex_name = "spot/texture.png"
 
 	obj = load(obj_name)
 	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(obj))
@@ -612,7 +603,7 @@ function test_obj()
 	TM = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
 	TI = load(tex_name)
 
-   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI], centre=true, scale=5.0)
+   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI], centre=true, scale=1.0)
 	rend()
 end
 
