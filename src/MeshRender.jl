@@ -1,6 +1,6 @@
 module MeshRender
 
-using StaticArrays, LinearAlgebra, GLFW, ModernGL, FileIO, VisionGeometry,
+using StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO, VisionGeometry,
 Images, Colors, ImageTransformations, Interpolations
 
 import GeometryBasics
@@ -124,7 +124,7 @@ mutable struct GLData
 		gl = new(0, Vector{GLBuffers}(), Vector{GLBuffers}())
 
 		for m in mesh_counts
-			push!(gl.mesh_buffers, GLBuffers(m))
+			push!(gl.mesh_buffers, GLBuffers(3*m))
 		end
 
 		for n in point_counts
@@ -189,7 +189,7 @@ mutable struct ViewData
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
 
-	function ViewData(window_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1), visible=true)
+	function ViewData(window_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); visible=true, mode=colour)
 
 		view = new(window_size[1], window_size[2], select)
 		GLFW.Init()
@@ -201,7 +201,7 @@ mutable struct ViewData
       glViewport(0,0,view.width,view.height)
 
 		# Viewing state
-		view.mode = texture # colour ############################################################
+		view.mode = mode
       view.opaque = true
 		view.arc_press = @SVector[0.0, 0.0, 0.0]
 		view.arc_drag = false
@@ -223,39 +223,33 @@ mutable struct Renderer <: AbstractRenderer
 							    normals::AbstractArray=nothing,
 								 texmaps::AbstractArray=nothing,
 								 teximgs=nothing,
+								 centre::Bool=true,
 		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
 							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							    visible=true)
 
+		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
+		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
-		#mesh_data = map((F,V,N,T) -> attrib_matrix(F,[V,N,T]), faces, vertices, normals, texmaps)
+      rend = new(ViewData(window_size,mode=texture), GLData(window_size, length.(faces), Int[], vsh, fsh))
 
-		mesh_data = map((F,V,N,T) -> vcat(stack(V),stack(N),stack(T)), faces, vertices, normals, texmaps)
+		if centre || scale != 1.0
+			vertices = map(V -> scale*(V.-[mean(V)]), vertices)
+		end
+
+		println(typeof([(0,vertices),(1,normals),(2,texmaps)]))
+		println(typeof(vertices))
+		println(typeof(normals))
+		println(typeof(texmaps))
+		println(typeof(faces))
 
 
-		display(transpose(gl_vec(stack(vertices[1]))))
-		display(transpose(gl_vec(stack(normals[1]))))
-		display(transpose(gl_vec(stack(texmaps[1]))))
-		display(transpose(gl_vec(stack(faces[1]) .- 1)))
-		println("T: $(typeof(teximgs[1])) : $(size(teximgs[1]))")
-
-		inds = map(f -> f.-1, reduce.(vcat,faces))
-
-		vsh = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
-		fsh = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
-
-      rend = new(ViewData(window_size), GLData(window_size, 3*length.(faces), Int64[], vsh, fsh))
-		
-		buffers!(rend.gl.mesh_buffers, gl_vec.(mesh_data); layout=[(0,3),(1,3),(2,2)], indices=gl_vec.(inds,GLuint), teximgs) 
-
-		gl_check()
-
+		buffers!(rend.gl.mesh_buffers, [(0,vertices),(1,normals),(2,texmaps)]; faces, teximgs) 
 		viewing!(rend; scale, clip, fov, location, target)
+		gl_check()
       return rend
    end
 end
-
-
 
 mutable struct FlatRenderer <: AbstractRenderer
 
@@ -273,20 +267,20 @@ mutable struct FlatRenderer <: AbstractRenderer
 							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
 							    visible=true)
 
-		mesh_data = map((F,V,N,C) -> gl_vec(vcat(stack(V[reduce(vcat,F)]),
-		                                         stack(repeat(N,inner=3)),
-					                                stack(repeat(C,inner=3)))), faces, vertices, normals, colours)
-
-		point_data = stack.(points)
-
 		vsh = pkgdir(@__MODULE__, "src", "FlatVert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "FlatFrag.glsl")
 
-      rend = new(ViewData(window_size), GLData(window_size, 3*length.(faces), length.(points), vsh, fsh))
+      rend = new(ViewData(window_size), GLData(window_size, length.(faces), length.(points), vsh, fsh))
 		
-		buffers!(rend.gl.mesh_buffers, mesh_data; layout=[(0,3),(1,3),(2,3)])
+		all_vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
+		all_normals = repeat.(normals,inner=3)
+		all_colours = repeat.(colours,inner=3)
 
-		buffers!(rend.gl.point_buffers, gl_vec.(point_data); layout=[(3,3)])
+		println(typeof([(3,all_vertices)]))
+		println(typeof([(3,points)]))
+
+		buffers!(rend.gl.mesh_buffers, [(0,all_vertices),(1,all_normals),(2,all_colours)]; )
+		buffers!(rend.gl.point_buffers, [(3,points)]; )
 		
 		viewing!(rend; scale, clip, fov, location, target)
       return rend
@@ -341,56 +335,60 @@ end
 
 """ Load data buffers for shaders.
 """
-function buffers!(bufs::Vector{GLBuffers}, data::Vector{Vector{GLfloat}}; layout::Vector{Tuple{Int,Int}}, indices=nothing, teximgs=nothing)
-
-	# Treat each v/n/c as a 3x1 column, and form a block array from the K meshes: 
-	#    V1 V2 ... VK
-	#    N1 N2 ... VK
-	#    C1 C2 ... VK
-	# Then vec the entire array, columnwise.
+function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; faces=nothing, teximgs=nothing) where {T<:Array}
 
 	for i in 1:length(bufs)
-		
+
+		# Attributes of i-th object
+		attribs = map(a -> last(a)[i], attributes)
+		# Vec of stacked attribute matrices (vertex data in columns)
+		data = gl_vec(vcat(stack.(attribs)...))
+		# Transfer the data
 		glBindVertexArray(bufs[i].vao)
 		glBindBuffer(GL_ARRAY_BUFFER, bufs[i].vbo)
-		glBufferData(GL_ARRAY_BUFFER, sizeof(data[i]), data[i], GL_STATIC_DRAW)
-
-		sizes = last.(layout)
+		glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW)
+		sizes = first.(size.(first.(attribs)))
 		stride = GLsizei.(sum(sizes) * sizeof(GLfloat))
-		offs = [0; cumsum(sizes)]
-
-		println("locations: $(first.(layout))")
-		println("sizes: $(sizes)")
-		println("strides: $(stride)")
-		println("offs: $(offs)")
-
-		for j in 1:length(layout)
-			glVertexAttribPointer(layout[j][1], layout[j][2], GL_FLOAT, GL_FALSE, stride, ptr_offset(offs[j]))
-			glEnableVertexAttribArray(first(layout[j]))
+		offsets = [0; cumsum(sizes)]
+		println("sizes, offsets, stride: $(sizes), $(offsets[1:end-1]), $(stride).")
+		for j in 1:length(attributes)
+			glVertexAttribPointer(first(attributes[j]), sizes[j], GL_FLOAT, GL_FALSE, stride, ptr_offset(offsets[j]))
+			glEnableVertexAttribArray(first(attributes[j]))
 		end
 
-		if isnothing(indices)
-			ind = gl_vec(collect(0 : bufs[i].n-1), GLuint)
+		# Indices
+		if isnothing(faces)
+			# Default consecutive indexing
+			indices = gl_vec(collect(0 : bufs[i].n-1), GLuint)
 		else
-			ind = indices[i]
+			# Flatten the face indices
+			indices = gl_vec(reduce(vcat,faces[i]) .- 1, GLuint)
 		end
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bufs[i].ibo)
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(ind), ind, GL_STATIC_DRAW)
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW)
 
+		# Textures
 		if !isnothing(teximgs)
+			img = reinterpret(GLubyte,teximgs[i])
+			num_channels = length(teximgs[i][1])
+			if num_channels == 3
+				fmt = GL_RGB
+			elseif num_channels == 4
+				fmt = GL_RGBA
+			else
+				error("Unhandled colour type (not RGB or RGBA).")
+			end
 
 			#glActiveTexture(GL_TEXTURE0)
 
 			glBindTexture(GL_TEXTURE_2D, bufs[i].tex)
 			#glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1024, 1024, 0, GL_RGB, GL_UNSIGNED_BYTE, gl_vec(teximgs[i],GLubyte))
+			glTexImage2D(GL_TEXTURE_2D, 0, fmt, size(teximgs[i])..., 0, fmt, GL_UNSIGNED_BYTE, img)
 			glGenerateMipmap(GL_TEXTURE_2D);
-
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-
 		end
 	end
 
@@ -603,32 +601,19 @@ function test_obj()
 
 	#using FileIO, GeometryBasics, VisionGeometry, MeshRender
 
-	obj_name = "spot/model.obj"
-	tex_name = "spot/texture.png"
+	obj_name = "banana/model.obj"
+	tex_name = "banana/texture.png"
 
 	obj = load(obj_name)
 	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(obj))
-	display(mesh)
-	F = SVector{3,Int32}.(GeometryBasics.faces(mesh))
+	F = SVector{3,UInt32}.(GeometryBasics.faces(mesh))
 	V = SVector{3,Float32}.(GeometryBasics.coordinates(mesh))
 	N = SVector{3,Float32}.(GeometryBasics.normals(mesh))
-	#TM = SVector{2,Float64}.(GeometryBasics.values(GeometryBasics.decompose_uv(obj)))
 	TM = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
-
 	TI = load(tex_name)
 
-	#v = channelview(TI)
-	#TI_raw = rawview(v) |> Array
-
-#	TI_alt = permutedims(colorview(RGB{N0f8},TI), (2, 1, 3))
-
-	TI_raw = reinterpret(UInt8,TI)
-
-	#display(dump(TI[1,1]))
-
-   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI_raw])
+   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI], centre=true, scale=5.0)
 	rend()
-
 end
 
 
