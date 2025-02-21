@@ -8,14 +8,13 @@ layout(location=4) in vec2 corner;
 
 uniform mat4 modelview, projection;
 uniform int render_mode;
-//uniform float opacity;
 uniform float near, far;
 
 out highp vec3 s, n;
 out mediump vec4 c;
 out vec2 map;
 
-// physical depth
+// Scene depth
 out float z;
 
 vec3 light = vec3(5.0, 5.0, 0.0);

@@ -1,6 +1,6 @@
 #version 400 
 
-//precision highp float;
+precision highp float;
 uniform int render_mode;
 uniform float near, far;
 
@@ -11,8 +11,6 @@ in highp vec3 s, n;
 in mediump vec4 c;
 in vec2 map;
 in float z;
-
-//out mediump vec4 colour;
 
 layout(location = 0) out mediump vec4 colour;
 
@@ -29,7 +27,7 @@ void main()
       colour = vec4(c.rgb * (0.5 + 0.5*lambert), opacity);
    }
    else if(render_mode == 2) {
-      // scaled depth: note that near <= abs(z) <= far 
+      // Scaled depth: near <= abs(z) <= far 
       float c  = (abs(z)-far) / (near-far);
       if(abs(z) < near)
          colour = vec4(0.0, 0.0, 1.0, 1.0);

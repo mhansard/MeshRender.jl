@@ -4,15 +4,13 @@ precision highp float;
 uniform int render_mode;
 uniform float near, far;
 
-uniform sampler2D image;
+uniform sampler2D teximg;
 uniform float opacity;
 
 in highp vec3 s, n;
 in mediump vec4 c;
-in highp vec2 map;
+in highp vec2 m;
 in float z;
-
-//out mediump vec4 colour;
 
 layout(location = 0) out mediump vec4 colour;
 
@@ -29,7 +27,7 @@ void main()
       colour = vec4(c.rgb * (0.5 + 0.5*lambert), opacity);
    }
    else if(render_mode == 2) {
-      // scaled depth: note that near <= abs(z) <= far 
+      // Scaled depth: near <= abs(z) <= far 
       float c  = (abs(z)-far) / (near-far);
       if(abs(z) < near)
          colour = vec4(0.0, 0.0, 1.0, 1.0);
@@ -42,6 +40,6 @@ void main()
       colour = vec4(vec3(0.0), 1.0);
    }
    else if(render_mode == 4) {
-		colour = vec4(texture(image,map).rgb, 1.0);
+		colour = vec4(texture(teximg,m).rgb, 1.0);
    }
 }

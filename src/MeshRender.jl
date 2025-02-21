@@ -9,8 +9,6 @@ export FlatRenderer, viewing!
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
-const vert_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderVert.glsl")
-const frag_shader_default = pkgdir(@__MODULE__, "src", "MeshRenderFrag.glsl")
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
     field of view (degrees), and aspect ratio.
@@ -87,7 +85,7 @@ end
 function gl_check(msg::String="")
 	err = glGetError()
 	if err != GL_NO_ERROR
-		error("Failed: $(GLENUM(err).name)" * msg)
+		println("Failed: $(GLENUM(err).name)" * msg)
 	end
 end
 
@@ -132,12 +130,12 @@ mutable struct GLData
 		end
 
 		gl.image_fb = Array{GLuint,1}(undef,1)
+		gl.image_tx = Array{GLuint,1}(undef,3)
+
 		glGenFramebuffers(1,pointer(gl.image_fb))
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fb[1])
 
-		gl.image_tx = Array{GLuint,1}(undef,2)
-
-		# Color buffer
+		# Color buffer #################################################### was RGB
 		glGenTextures(1,pointer(gl.image_tx,1))
 		glBindTexture(GL_TEXTURE_2D, gl.image_tx[1])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
@@ -157,11 +155,26 @@ mutable struct GLData
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_tx[2], 0)
 
+
+#=
+glGenTextures(1,pointer(gl.image_tx,3))
+glBindTexture(GL_TEXTURE_2D, gl.image_tx[3])
+glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+=#
+
+
 		gl.draw_bf = Array{GLenum,1}(undef,1)
 		gl.draw_bf[1] = GL_COLOR_ATTACHMENT0
 		glDrawBuffers(1,pointer(gl.draw_bf))
-		status_fb = glCheckFramebufferStatus(GL_FRAMEBUFFER)
-		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fb[1])
+
+		if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE 
+			error("GLData: Incomplete framebuffer")
+		end
+
 		gl.data = Array{GLubyte,1}(undef, prod(width_height)*4)
 		
 		compile!(gl, vert_shader, frag_shader)
@@ -369,11 +382,8 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 			else
 				error("Unhandled colour type (not RGB or RGBA).")
 			end
-
-			#glActiveTexture(GL_TEXTURE0)
-
+			glActiveTexture(GL_TEXTURE0 + i-1)
 			glBindTexture(GL_TEXTURE_2D, bufs[i].tex)
-			#glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
 			glTexImage2D(GL_TEXTURE_2D, 0, fmt, size(teximgs[i])..., 0, fmt, GL_UNSIGNED_BYTE, img)
 			glGenerateMipmap(GL_TEXTURE_2D);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
@@ -382,8 +392,6 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
 		end
 	end
-
-	gl_check()
 end
 
 """ Render one frame.
@@ -391,10 +399,8 @@ end
 function render(rend::AbstractRenderer)
    if rend.view.mode == colour || rend.view.mode == depth || rend.view.mode == texture
 
-		glUniform1i(glGetUniformLocation(rend.gl.program,"image"), 0)
-
 		for k in range(rend.view.select...)
-			#println("rendering $(rend.gl.mesh_buffers[k].n)")
+			glUniform1i(glGetUniformLocation(rend.gl.program,"teximg"), k-1)
 			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.mesh_buffers[k].ibo)
 			glDrawElements(GL_TRIANGLES, rend.gl.mesh_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
@@ -408,7 +414,6 @@ function render(rend::AbstractRenderer)
 			#glDrawArrays(GL_POINTS, 0, rend.gl.point_buffers[k].n)
 		end
 	end
-	#gl_check()
 end
 
 """ Update viewing geometry.
@@ -470,6 +475,7 @@ function (rend::AbstractRenderer)(; opts...)
 				rend.view.select = (k,k)
 			
 			elseif button == GLFW.KEY_I && action == GLFW.PRESS
+				#gl_check()
 				rend("meshrender.png"; opts...)
 			end
 			glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
@@ -539,27 +545,36 @@ end
 
 function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
 
+display(rend.gl.image_tx)
+
+display(map(b->b.tex, rend.gl.mesh_buffers))
+
 	options!(rend; opts...)
-	
+
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
 
 	# Set first texture as target
-   glBindFramebuffer(GL_FRAMEBUFFER, rend.gl.image_tx[1])
+   glBindFramebuffer(GL_FRAMEBUFFER, rend.gl.image_fb[1])
+
+	if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE 
+		error("Incomplete framebuffer")
+	end
+	gl_check()
+
    # Re-render in the current mode
    update!(rend)
    render(rend)
-
-   glBindTexture(GL_TEXTURE_2D, rend.gl.image_tx[1])
-   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.gl.data))
-
+	# Reset
 	glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+	glBindTexture(GL_TEXTURE_2D, rend.gl.image_tx[1])
+   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.gl.data))
 
    println("depth range: $(extrema(Float64.(rend.gl.data)))")
 
    image = colorview(RGBA, normedview(reshape(rend.gl.data, (4,rend.view.width,rend.view.height))))
 
-	gl_check()
    save(file, transpose(image[:,end:-1:1]))
 end
 
@@ -603,7 +618,18 @@ function test_obj()
 	TM = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
 	TI = load(tex_name)
 
-   rend = MeshRender.Renderer((1200,1200), [F], [V], normals=[N], texmaps=[TM], teximgs=[TI], centre=true, scale=1.0)
+	obj_name = "banana/model.obj"
+	tex_name = "banana/texture.png"
+
+	obj = load(obj_name)
+	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(obj))
+	F2 = SVector{3,UInt32}.(GeometryBasics.faces(mesh))
+	V2 = SVector{3,Float32}.(GeometryBasics.coordinates(mesh))
+	N2 = SVector{3,Float32}.(GeometryBasics.normals(mesh))
+	TM2 = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
+	TI2 = load(tex_name)
+
+   rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], normals=[N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scale=4.0)
 	rend()
 end
 

@@ -2,18 +2,17 @@
 
 layout(location=0) in vec3 vertex;
 layout(location=1) in vec3 normal;
-layout(location=2) in vec2 texcoord;
+layout(location=2) in vec2 texmap;
 
 uniform mat4 modelview, projection;
 uniform int render_mode;
-//uniform float opacity;
 uniform float near, far;
 
 out highp vec3 s, n;
 out mediump vec4 c;
-out highp vec2 map;
+out highp vec2 m;
 
-// physical depth
+// Scene depth
 out float z;
 
 vec3 light = vec3(5.0, 5.0, 0.0);
@@ -32,6 +31,6 @@ void main()
     }
     else if(render_mode == 4) {
 		  gl_Position = projection * modelview * vec4(vertex,1.0);
-		  map = texcoord;
+		  m = texmap;
     }
 }
