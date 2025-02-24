@@ -5,7 +5,7 @@ Images, Colors, ImageTransformations, Interpolations
 
 import GeometryBasics
 
-export FlatRenderer, viewing!
+export Renderer, FlatRenderer, __FlatRenderer, viewing!
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
@@ -114,7 +114,7 @@ mutable struct GLData
 	draw_buffers::Vector{GLenum}
 	data::Vector{GLubyte}
 
-	function GLData(width_height::Tuple{Int,Int}, mesh_counts::Vector{Int}=[], point_counts::Vector{Int}=[],
+	function GLData(width_height::Tuple{Int,Int}, mesh_counts::AbstractVector=[], point_counts::AbstractVector=[],
 		             vert_shader::String=vert_shader_default,
 						 frag_shader::String=frag_shader_default)
 
@@ -221,16 +221,21 @@ mutable struct Renderer <: AbstractRenderer
 
 	view::ViewData
 	gl::GLData
-
+	has_colour::Bool
+	has_texture::Bool
+	has_points::Bool
+	
    @doc """
    Construct a `Renderer`.
 	"""
-   function Renderer(window_size::Tuple{Int,Int}, 
-                     faces::Vector{Vector{SVector{3,Ind}}}, 
+   function Renderer(window_size::Tuple{Int,Int},
+                     faces::Vector{Vector{SVector{3,Ind}}},
                      vertices::Vector{Vector{SVector{3,Coord}}},
                      normals::Vector{Vector{SVector{3,Coord}}};
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
+							colours::AbstractVector=[],
+							points::AbstractVector=[],
                      centre::Bool=true,
                      scale::Float64=1.0,
                      fov::Float64=60.0,
@@ -242,28 +247,37 @@ mutable struct Renderer <: AbstractRenderer
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
-		bbox = bounding_box(vertices)
-		midpoint = SVector{3}(mean.(bbox))
+		extents = bounding_box(vertices)
+		midpoint = SVector{3}(mean.(extents))
 		# Default viewing parameters, based on camera at distance of 3 * (max object extents).
-		zcam = 3.0 * scale * maximum(abs.(Iterators.flatten(bbox)))
+		zcam = 3.0 * scale * maximum(abs.(Iterators.flatten(extents)))
 		location = any(isnothing.(location)) ? [0.0, 0.0, zcam] : location
 		clip = any(isnothing.(clip)) ? (0.1*zcam, 5.0*zcam) : clip
 		if centre || scale != 1.0
 			vertices = map(V -> scale*(V.-[midpoint]), vertices)
 		end
 
-		if isempty(teximgs)
-			attributes = [(0,vertices), (1,normals)]
-			mode = colour
-		else
-			attributes = [(0,vertices), (1,normals), (2,texmaps)]
-			mode = texture
+		if length(faces) == length(colours)
+			# Expand/duplicate vertices and attributes  
+			vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
+			normals = repeat.(normals,inner=3)
+			colours = repeat.(colours,inner=3)
+			faces = map(V -> 1:length(V), vertices)
 		end
 
+		attributes = [(0,vertices), (1,normals), (2,texmaps), (3,colours)]
+
+		mode = isempty(teximgs) ? colour : texture
+
+display(typeof( length.(points)))
+
 		rend = new(ViewData(window_size; mode),
-		           GLData(window_size, length.(faces), Int[], vsh, fsh))
+		           GLData(window_size, length.(faces), length.(points), vsh, fsh), 
+					  !isempty(colours), !isempty(teximgs), !isempty(points))
 
 		buffers!(rend.gl.mesh_buffers, attributes; faces, teximgs)
+		buffers!(rend.gl.point_buffers, [(4,points)])
+
 		viewing!(rend; scale, clip, fov, location, target)
 		gl_check()
       return rend
@@ -305,6 +319,7 @@ mutable struct FlatRenderer <: AbstractRenderer
       return rend
    end
 end
+
 
 """ Compile and link shaders.
 """
@@ -355,7 +370,10 @@ end
 
 """ Load data buffers for shaders.
 """
-function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; faces=nothing, teximgs=nothing) where {T<:Array}
+function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; faces=[], teximgs=[]) where {T<:Array}
+
+	# Remove any empty attribute arrays
+	attributes = filter(a -> !isempty(last(a)), attributes)
 
 	for i in 1:length(bufs)
 
@@ -377,7 +395,7 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 		end
 
 		# Indices
-		if isnothing(faces)
+		if isempty(faces)
 			# Default consecutive indexing
 			indices = gl_vec(collect(0 : bufs[i].n-1), GLuint)
 		else
@@ -457,16 +475,16 @@ function (rend::AbstractRenderer)(; opts...)
 			if button == GLFW.KEY_ESCAPE
 				GLFW.SetWindowShouldClose(rend.view.window,true)
 			
-			elseif button == GLFW.KEY_C && action == GLFW.PRESS
+			elseif button == GLFW.KEY_C && action == GLFW.PRESS && rend.has_colour
 				rend.view.mode = colour
 			
-			elseif button == GLFW.KEY_T && action == GLFW.PRESS
+			elseif button == GLFW.KEY_T && action == GLFW.PRESS && rend.has_texture
 				rend.view.mode = texture
 
 			elseif button == GLFW.KEY_D && action == GLFW.PRESS
 				rend.view.mode = depth
 			
-			elseif button == GLFW.KEY_P && action == GLFW.PRESS
+			elseif button == GLFW.KEY_P && action == GLFW.PRESS && rend.has_points
 				rend.view.mode = points
 			
 			elseif button == GLFW.KEY_O && action == GLFW.PRESS
@@ -651,6 +669,7 @@ function test_obj()
 
    rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scale=1.0)
 	#rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2])
+
 	rend()
 end
 
