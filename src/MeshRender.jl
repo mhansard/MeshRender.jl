@@ -109,10 +109,9 @@ mutable struct GLData
 	program::GLuint
 	mesh_buffers::Vector{GLBuffers}
 	point_buffers::Vector{GLBuffers}
-
-	image_tx::Vector{GLuint}
-	image_fb::Vector{GLuint}
-	draw_bf::Vector{GLenum}
+	image_texs::Vector{GLuint}
+	image_fbos::Vector{GLuint}
+	draw_buffers::Vector{GLenum}
 	data::Vector{GLubyte}
 
 	function GLData(width_height::Tuple{Int,Int}, mesh_counts::Vector{Int}=[], point_counts::Vector{Int}=[],
@@ -129,47 +128,37 @@ mutable struct GLData
 			push!(gl.point_buffers, GLBuffers(n))
 		end
 
-		gl.image_fb = Array{GLuint,1}(undef,1)
-		gl.image_tx = Array{GLuint,1}(undef,3)
+		gl.image_fbos = Array{GLuint,1}(undef,1)
+		gl.image_texs = Array{GLuint,1}(undef,2)
 
-		glGenFramebuffers(1,pointer(gl.image_fb))
-		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fb[1])
+		# Bind offscreen framebuffer to current output
+		glGenFramebuffers(1,pointer(gl.image_fbos))
+		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fbos[1])
 
-		# Color buffer #################################################### was RGB
-		glGenTextures(1,pointer(gl.image_tx,1))
-		glBindTexture(GL_TEXTURE_2D, gl.image_tx[1])
+		# Color buffer target
+		glGenTextures(1,pointer(gl.image_texs,1))
+		glBindTexture(GL_TEXTURE_2D, gl.image_texs[1])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_tx[1], 0)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0)
 
-		# Depth buffer
-		glGenTextures(1,pointer(gl.image_tx,2))
-		glBindTexture(GL_TEXTURE_2D, gl.image_tx[2])
+		# Depth buffer target
+		glGenTextures(1,pointer(gl.image_texs,2))
+		glBindTexture(GL_TEXTURE_2D, gl.image_texs[2])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, width_height..., 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_tx[2], 0)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_texs[2], 0)
 
-
-#=
-glGenTextures(1,pointer(gl.image_tx,3))
-glBindTexture(GL_TEXTURE_2D, gl.image_tx[3])
-glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-=#
-
-
-		gl.draw_bf = Array{GLenum,1}(undef,1)
-		gl.draw_bf[1] = GL_COLOR_ATTACHMENT0
-		glDrawBuffers(1,pointer(gl.draw_bf))
+		# Location 0 in fragment shader output 
+		gl.draw_buffers = Array{GLenum,1}(undef,1)
+		gl.draw_buffers[1] = GL_COLOR_ATTACHMENT0
+		glDrawBuffers(1,pointer(gl.draw_buffers))
 
 		if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE 
 			error("GLData: Incomplete framebuffer")
@@ -223,6 +212,10 @@ mutable struct ViewData
 	end
 end
 
+function bounding_box(vertex_arrays)
+	vec(extrema(reduce(hcat,stack.(vertex_arrays)), dims=2))
+end
+
 
 mutable struct Renderer <: AbstractRenderer
 
@@ -232,25 +225,45 @@ mutable struct Renderer <: AbstractRenderer
    @doc """
    Construct a `Renderer`.
 	"""
-   function Renderer(window_size::Tuple{Int,Int}, faces::AbstractArray, vertices::AbstractArray;
-							    normals::AbstractArray=nothing,
-								 texmaps::AbstractArray=nothing,
-								 teximgs=nothing,
-								 centre::Bool=true,
-		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
-							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-							    visible=true)
+   function Renderer(window_size::Tuple{Int,Int}, 
+                     faces::Vector{Vector{SVector{3,Ind}}}, 
+                     vertices::Vector{Vector{SVector{3,Coord}}},
+                     normals::Vector{Vector{SVector{3,Coord}}};
+                     texmaps::AbstractVector=[],
+                     teximgs::AbstractVector=[],
+                     centre::Bool=true,
+                     scale::Float64=1.0,
+                     fov::Float64=60.0,
+                     clip::Tuple=(nothing,nothing),
+                     location::AbstractVector=[nothing,nothing,nothing],
+                     target::AbstractVector=[0.0,0.0,0.0],
+                     visible=true) where {Ind <: Integer, Coord <: Number}
 
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
-      rend = new(ViewData(window_size,mode=texture), GLData(window_size, length.(faces), Int[], vsh, fsh))
-
+		bbox = bounding_box(vertices)
+		midpoint = SVector{3}(mean.(bbox))
+		# Default viewing parameters, based on camera at distance of 3 * (max object extents).
+		zcam = 3.0 * scale * maximum(abs.(Iterators.flatten(bbox)))
+		location = any(isnothing.(location)) ? [0.0, 0.0, zcam] : location
+		clip = any(isnothing.(clip)) ? (0.1*zcam, 5.0*zcam) : clip
 		if centre || scale != 1.0
-			vertices = map(V -> scale*(V.-[mean(V)]), vertices)
+			vertices = map(V -> scale*(V.-[midpoint]), vertices)
 		end
 
-		buffers!(rend.gl.mesh_buffers, [(0,vertices),(1,normals),(2,texmaps)]; faces, teximgs) 
+		if isempty(teximgs)
+			attributes = [(0,vertices), (1,normals)]
+			mode = colour
+		else
+			attributes = [(0,vertices), (1,normals), (2,texmaps)]
+			mode = texture
+		end
+
+		rend = new(ViewData(window_size; mode),
+		           GLData(window_size, length.(faces), Int[], vsh, fsh))
+
+		buffers!(rend.gl.mesh_buffers, attributes; faces, teximgs)
 		viewing!(rend; scale, clip, fov, location, target)
 		gl_check()
       return rend
@@ -265,25 +278,28 @@ mutable struct FlatRenderer <: AbstractRenderer
    @doc """
    Construct a `FlatRenderer`.
 	"""
-   function FlatRenderer(window_size::Tuple{Int,Int}, faces::Vector{IVectors{3}}, vertices::Vector{GVectors{3}};
-							    normals::Vector{GVectors{3}}=nothing,
+   function FlatRenderer(window_size::Tuple{Int,Int}, faces::Vector{Vector{SVector{3,Ind}}}, vertices::Vector{GVectors{3}};
+							    normals::Vector{Vector{SVector{3,Coord}}},
 							    colours::Vector{GVectors{3}}=nothing,
 							    points::Vector{GVectors{3}}=nothing,
 		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
 							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-							    visible=true)
+							    visible=true) where {Ind <: Integer, Coord <: Number}
+
 
 		vsh = pkgdir(@__MODULE__, "src", "FlatVert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "FlatFrag.glsl")
 
-      rend = new(ViewData(window_size), GLData(window_size, length.(faces), length.(points), vsh, fsh))
+      rend = new(ViewData(window_size),
+                 GLData(window_size, length.(faces), length.(points), vsh, fsh))
 		
+		# Expand/duplicate vertices and attributes  
 		all_vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
 		all_normals = repeat.(normals,inner=3)
 		all_colours = repeat.(colours,inner=3)
 
 		buffers!(rend.gl.mesh_buffers, [(0,all_vertices),(1,all_normals),(2,all_colours)])
-		buffers!(rend.gl.point_buffers, [(3,points)]; )
+		buffers!(rend.gl.point_buffers, [(3,points)])
 		
 		viewing!(rend; scale, clip, fov, location, target)
       return rend
@@ -313,6 +329,7 @@ function options!(rend::AbstractRenderer;
    glEnable(GL_DEPTH_TEST)
    glDepthFunc(GL_LESS)
 	glEnable(GL_TEXTURE_2D)
+	glEnable(GL_CULL_FACE)
    glEnable(GL_PROGRAM_POINT_SIZE)
 end
 
@@ -371,7 +388,7 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW)
 
 		# Textures
-		if !isnothing(teximgs)
+		if !isempty(teximgs)
 			# Flip and cast image.
 			img = reinterpret(GLubyte, transpose(teximgs[i][end:-1:1,:]))
 			num_channels = length(teximgs[i][1])
@@ -529,7 +546,9 @@ function (rend::AbstractRenderer)(; opts...)
 			rend.view.arc_drag = false
 		end)
 
+	# Set shader options
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
+	# Bind location 0 in fragments shader output to display
    glBindFramebuffer(GL_FRAMEBUFFER,0)
 
    while !GLFW.WindowShouldClose(rend.view.window)
@@ -545,7 +564,7 @@ end
 
 function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
 
-display(rend.gl.image_tx)
+display(rend.gl.image_texs)
 
 display(map(b->b.tex, rend.gl.mesh_buffers))
 
@@ -554,8 +573,8 @@ display(map(b->b.tex, rend.gl.mesh_buffers))
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
 
-	# Set first texture as target
-   glBindFramebuffer(GL_FRAMEBUFFER, rend.gl.image_fb[1])
+	# Set texture as target for drawing via framebuffer object
+   glBindFramebuffer(GL_FRAMEBUFFER, rend.gl.image_fbos[1])
 
 	if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE 
 		error("Incomplete framebuffer")
@@ -565,10 +584,11 @@ display(map(b->b.tex, rend.gl.mesh_buffers))
    # Re-render in the current mode
    update!(rend)
    render(rend)
-	# Reset
+	# Reset to display
 	glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-	glBindTexture(GL_TEXTURE_2D, rend.gl.image_tx[1])
+	# Read from texture
+	glBindTexture(GL_TEXTURE_2D, rend.gl.image_texs[1])
    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.gl.data))
 
    println("depth range: $(extrema(Float64.(rend.gl.data)))")
@@ -629,7 +649,8 @@ function test_obj()
 	TM2 = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
 	TI2 = load(tex_name)
 
-   rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], normals=[N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scale=4.0)
+   rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scale=1.0)
+	#rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2])
 	rend()
 end
 

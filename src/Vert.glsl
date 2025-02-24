@@ -19,18 +19,20 @@ vec3 light = vec3(5.0, 5.0, 0.0);
 
 void main()
 {
-    gl_PointSize = 5.0;
-    if(render_mode == 1 || render_mode == 2) {
-        gl_Position = projection * modelview * vec4(vertex,1.0);
-        z = (modelview * vec4(vertex,1.0)).z;
-        s = normalize(light - vertex.xyz);
-        n = normalize((modelview * vec4(normal,0.0)).xyz);
-        c = vec4(0.0);
-    }
-    else if(render_mode == 3) {
-    }
-    else if(render_mode == 4) {
-		  gl_Position = projection * modelview * vec4(vertex,1.0);
-		  m = texmap;
-    }
+	gl_PointSize = 5.0;
+	if(render_mode == 1 || render_mode == 2) {
+		gl_Position = projection * modelview * vec4(vertex,1.0);
+		z = (modelview * vec4(vertex,1.0)).z;
+		s = normalize(light - vertex.xyz);
+		n = normalize((modelview * vec4(normal,0.0)).xyz);
+		c = vec4(0.2);
+	}
+	else if(render_mode == 3) {
+	}
+	else if(render_mode == 4) {
+		gl_Position = projection * modelview * vec4(vertex,1.0);
+		m = texmap;
+		n = normalize((modelview * vec4(normal,0.0)).xyz);
+		s = normalize(light - vertex.xyz);
+	}
 }

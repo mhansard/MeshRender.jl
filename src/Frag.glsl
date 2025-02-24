@@ -16,18 +16,18 @@ layout(location = 0) out mediump vec4 colour;
 
 float scene_depth(float frag_z)
 {
-   float ndc_z = 2.0*frag_z - 1.0;
+	float ndc_z = 2.0*frag_z - 1.0;
    return (2.0*near*far) / (far + near - ndc_z*(far-near));
 }
 
 void main()
 {
-   if(render_mode == 1) {
+	if(render_mode == 1) {
       mediump float lambert = max(dot(normalize(s), normalize(n)), 0.0);
-      colour = vec4(c.rgb * (0.5 + 0.5*lambert), opacity);
+      colour = vec4((0.5 + 0.5*lambert) * c.rgb, opacity);
    }
    else if(render_mode == 2) {
-      // Scaled depth: near <= abs(z) <= far 
+		// Scaled depth: near <= abs(z) <= far 
       float c  = (abs(z)-far) / (near-far);
       if(abs(z) < near)
          colour = vec4(0.0, 0.0, 1.0, 1.0);
@@ -40,6 +40,7 @@ void main()
       colour = vec4(vec3(0.0), 1.0);
    }
    else if(render_mode == 4) {
-		colour = vec4(texture(teximg,m).rgb, 1.0);
+		mediump float lambert = max(dot(normalize(s), normalize(n)), 0.0);
+		colour = vec4((0.5 + 0.5*lambert) * texture(teximg,m).rgb, 1.0);
    }
 }
