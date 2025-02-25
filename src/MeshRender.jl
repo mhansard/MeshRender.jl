@@ -221,15 +221,15 @@ mutable struct Renderer <: AbstractRenderer
 
 	view::ViewData
 	gl::GLData
-	available::NamedTuple{(:colour,:texture,:points)}
+	available::NamedTuple{(:colour,:texture,:points),Tuple{Bool,Bool,Bool}}
 
    @doc """
    Construct a `Renderer`.
 	"""
    function Renderer(window_size::Tuple{Int,Int},
-                     faces::Vector{Vector{SVector{3,Ind}}},
-                     vertices::Vector{Vector{SVector{3,Coord}}},
-                     normals::Vector{Vector{SVector{3,Coord}}};
+                     faces::Vector{<:Vector{<:SVector{3,<:Integer}}},
+                     vertices::Vector{<:Vector{<:SVector{3,<:Real}}},
+                     normals::Vector{<:Vector{<:SVector{3,<:Real}}};
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
 							colours::AbstractVector=[],
@@ -237,10 +237,10 @@ mutable struct Renderer <: AbstractRenderer
                      centre::Bool=true,
                      scale::Float64=1.0,
                      fov::Float64=60.0,
-                     clip::Tuple=(nothing,nothing),
-                     location::AbstractVector=[nothing,nothing,nothing],
+                     clip::Tuple=(),
+                     location::AbstractVector=[],
                      target::AbstractVector=[0.0,0.0,0.0],
-                     visible=true) where {Ind <: Integer, Coord <: Number}
+                     visible=true)
 
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
@@ -249,8 +249,8 @@ mutable struct Renderer <: AbstractRenderer
 		midpoint = SVector{3}(mean.(extents))
 		# Default viewing parameters, based on camera at distance of 3 * (max object extents).
 		zcam = 3.0 * scale * maximum(abs.(Iterators.flatten(extents)))
-		location = any(isnothing.(location)) ? [0.0, 0.0, zcam] : location
-		clip = any(isnothing.(clip)) ? (0.1*zcam, 5.0*zcam) : clip
+		location = isempty(location) ? [0.0, 0.0, zcam] : location
+		clip = isempty(clip) ? (0.1*zcam, 5.0*zcam) : clip
 		if centre || scale != 1.0
 			vertices = map(V -> scale*(V.-[midpoint]), vertices)
 		end
