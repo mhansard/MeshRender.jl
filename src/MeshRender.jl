@@ -221,10 +221,8 @@ mutable struct Renderer <: AbstractRenderer
 
 	view::ViewData
 	gl::GLData
-	has_colour::Bool
-	has_texture::Bool
-	has_points::Bool
-	
+	available::NamedTuple{(:colour,:texture,:points)}
+
    @doc """
    Construct a `Renderer`.
 	"""
@@ -265,17 +263,14 @@ mutable struct Renderer <: AbstractRenderer
 			faces = map(V -> 1:length(V), vertices)
 		end
 
-		attributes = [(0,vertices), (1,normals), (2,texmaps), (3,colours)]
-
 		mode = isempty(teximgs) ? colour : texture
-
-display(typeof( length.(points)))
 
 		rend = new(ViewData(window_size; mode),
 		           GLData(window_size, length.(faces), length.(points), vsh, fsh), 
-					  !isempty(colours), !isempty(teximgs), !isempty(points))
+					  .!isempty.((colours,teximgs,points)))
 
-		buffers!(rend.gl.mesh_buffers, attributes; faces, teximgs)
+		buffers!(rend.gl.mesh_buffers, [(0,vertices), (1,normals), (2,texmaps), (3,colours)];
+		         faces, teximgs)
 		buffers!(rend.gl.point_buffers, [(4,points)])
 
 		viewing!(rend; scale, clip, fov, location, target)
@@ -475,16 +470,16 @@ function (rend::AbstractRenderer)(; opts...)
 			if button == GLFW.KEY_ESCAPE
 				GLFW.SetWindowShouldClose(rend.view.window,true)
 			
-			elseif button == GLFW.KEY_C && action == GLFW.PRESS && rend.has_colour
+			elseif button == GLFW.KEY_C && action == GLFW.PRESS && rend.available.colour
 				rend.view.mode = colour
 			
-			elseif button == GLFW.KEY_T && action == GLFW.PRESS && rend.has_texture
+			elseif button == GLFW.KEY_T && action == GLFW.PRESS && rend.available.texture
 				rend.view.mode = texture
 
 			elseif button == GLFW.KEY_D && action == GLFW.PRESS
 				rend.view.mode = depth
 			
-			elseif button == GLFW.KEY_P && action == GLFW.PRESS && rend.has_points
+			elseif button == GLFW.KEY_P && action == GLFW.PRESS && rend.available.points
 				rend.view.mode = points
 			
 			elseif button == GLFW.KEY_O && action == GLFW.PRESS
