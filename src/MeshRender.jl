@@ -183,7 +183,6 @@ mutable struct ViewData
    opaque::Bool
 
 	# Geometry
-	scale::Float64
 	clip::Tuple{Float64,Float64}
 	fov::Float64
 	location::GVector{3}
@@ -197,7 +196,7 @@ mutable struct ViewData
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT,GL_TRUE)
-      GLFW.WindowHint(GLFW.VISIBLE, visible)
+      GLFW.WindowHint(GLFW.VISIBLE, false)
       view.window = GLFW.CreateWindow(view.width, view.height, "Rendering mesh range $(view.select)")
       GLFW.MakeContextCurrent(view.window)
       glViewport(0,0,view.width,view.height)
@@ -231,35 +230,43 @@ mutable struct Renderer <: AbstractRenderer
                 texmaps::AbstractVector=[],
                 teximgs::AbstractVector=[],
                 colours::AbstractVector=[],
-                points::AbstractVector=[],
+                pointclouds::AbstractVector=[],
                 centre::Bool=true,
-                scale::Float64=1.0,
+                scale::AbstractVector=[],
                 fov::Float64=60.0,
                 clip::Tuple=(),
                 location::AbstractVector=[],
-                target::AbstractVector=[0.0,0.0,0.0],
-                visible=true)
+                target::AbstractVector=[0.0,0.0,0.0])
 
    Construct a `Renderer`, using the default shaders `Vert.glsl` and `Frag.glsl`.
-   Each vector in `faces` contains the index-triples for an individual mesh, referring 
-   to the corresponding vertex attributes in `normals`, and optionally `texmaps` and/or
-   `colours`.
+   Each vector in `faces` contains the SVector{3,Int} indices for an individual mesh, 
+   with reference to the corresponding vertex attributes in `normals`, and optionally `texmaps` 
+   and/or `colours`; for example the `faces` argument [`F1`,`F2`] would index vertices [`V1`,`V2`]
+   and normals [`N1`,`N2`] of two meshes. In the case of a single object, the surrounding brackets
+	are not needed.
+
+   Texture coordinates can be supplied in `texmaps`, with corresponding images in `teximgs`.
 
    Alternatively, if length(`colours`)==length(`faces`) then flat per-face colouring is assumed.
    
-   The optional `points` vector may contain a set of pointclouds, associated with the 
-   corresponding meshes in the mandatory arguments.
+   The optional `pointclouds` vector may contain a set of point clouds, associated with the 
+   corresponding meshes (in the mandatory arguments).
+
+   If `centre`=true then the meshes are centred on the midpoint of the collective bounding box,
+   with an optional overall `scale` applied to the vertices.
+
+   Viewing parameters are set by `fov` (degrees) and `clip`=(near,far). The default camera 
+   `location` is [0,0,6`r`], where `r` is the maximum axis-aligned radius of the collective 
+   bounding box. The default `target` of the camera is the origin [0,0,0].
+
+   Alternative renderers, using different shaders, can be defined as subtypes of `AbstractRenderer`,
+   by making appropriate use of the `buffers!()` function in the constructor.
 
    # Examples
-       # Multiple meshes
+       # Multiple meshes rendered on-screen and off
        rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
        rend()
-       # Offscreen rendering of a single mesh
-       rend = Renderer((w,h), F, V, N, visible=false)
        rend("capture.png")
-   
-   The default camera `location` is [0,0,6`r`], where `r` is the maximum axis-aligned
-   radius of the collective bounding box.
 
    # Keyboard controls
    - `Tab`: Show next mesh
@@ -278,9 +285,9 @@ mutable struct Renderer <: AbstractRenderer
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
                      colours::AbstractVector=[],
-                     points::AbstractVector=[],
+                     pointclouds::AbstractVector=[],
                      centre::Bool=true,
-                     scale::Float64=1.0,
+                     scales::AbstractVector=[],
                      fov::Float64=60.0,
                      clip::Tuple=(),
                      location::AbstractVector=[],
@@ -290,16 +297,20 @@ mutable struct Renderer <: AbstractRenderer
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
+		# Set sensible default viewing parameters
 		extents = bounding_box(vertices)
 		midpoint = SVector{3}(mean.(extents))
-		# Default viewing parameters, based on camera at distance of 3 * (max extents/2).
-		zcam = 6.0 * scale * 0.5*maximum(abs.(Iterators.flatten(extents)))
+		# Camera distance of 6 * (max extents)/2 along +Z axis
+		zcam = 6.0 * 0.5*maximum(abs.(Iterators.flatten(extents)))
 		location = isempty(location) ? [0.0, 0.0, zcam] : location
 		clip = isempty(clip) ? (0.1*zcam, 5.0*zcam) : clip
-		if centre || scale != 1.0
-			vertices = map(V -> scale*(V.-[midpoint]), vertices)
+		if centre
+			vertices = map((s,V) -> s*(V.-[midpoint]), 
+			               isempty(scales) ? fill(1.0,length(vertices)) : scales,
+								vertices)
 		end
 
+		# Handle per-face rendering
 		if length(faces) == length(colours)
 			# Expand/duplicate vertices and attributes  
 			vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
@@ -308,58 +319,44 @@ mutable struct Renderer <: AbstractRenderer
 			faces = map(V -> 1:length(V), vertices)
 		end
 
+		# Set initial rendering mode
 		mode = isempty(teximgs) ? colour : texture
 
+		# Allocate ViewData and GLData objects 
 		rend = new(ViewData(image_size; mode),
-		           GLData(image_size, length.(faces), length.(points), vsh, fsh), 
-					  .!isempty.((colours,teximgs,points)))
+		           GLData(image_size, length.(faces), length.(pointclouds), vsh, fsh), 
+					  .!isempty.((colours,teximgs,pointclouds)))
 
+		# Initialize GLData objects
 		buffers!(rend.gl.mesh_buffers, [(0,vertices), (1,normals), (2,texmaps), (3,colours)];
 		         faces, teximgs)
-		buffers!(rend.gl.point_buffers, [(4,points)])
+		buffers!(rend.gl.point_buffers, [(4,pointclouds)])
 
-		viewing!(rend; scale, clip, fov, location, target)
+		# Set viewing parameters
+		viewing!(rend; clip, fov, location, target)
 		gl_check()
       return rend
    end
 end
 
-mutable struct FlatRenderer <: AbstractRenderer
+""" Handle the case of a single object, without having to use [F], [V], [N], etc.
+"""
+function Renderer(image_size::Tuple{Int,Int},
+                  faces::Vector{<:SVector{3,<:Integer}},
+                  vertices::Vector{<:SVector{3,<:Real}},
+                  normals::Vector{<:SVector{3,<:Real}};
+						texmaps::AbstractVector=[],
+						teximgs::Matrix=[],
+						colours::AbstractVector=[],
+						pointclouds::AbstractVector=[], etc...)
 
-	view::ViewData
-	gl::GLData
-
-   @doc """
-   Construct a `FlatRenderer`.
-	"""
-   function FlatRenderer(image_size::Tuple{Int,Int}, faces::Vector{Vector{SVector{3,Ind}}}, vertices::Vector{GVectors{3}};
-							    normals::Vector{Vector{SVector{3,Coord}}},
-							    colours::Vector{GVectors{3}}=nothing,
-							    points::Vector{GVectors{3}}=nothing,
-		                   scale::Float64=1.0, clip::Tuple{Float64,Float64}=(0.1,30.0), fov::Float64=60.0,
-							    location::AbstractVector=[0.0,0.0,5.0], target::AbstractVector=[0.0,0.0,0.0],
-							    visible=true) where {Ind <: Integer, Coord <: Number}
-
-
-		vsh = pkgdir(@__MODULE__, "src", "FlatVert.glsl")
-		fsh = pkgdir(@__MODULE__, "src", "FlatFrag.glsl")
-
-      rend = new(ViewData(image_size),
-                 GLData(image_size, length.(faces), length.(points), vsh, fsh))
-		
-		# Expand/duplicate vertices and attributes  
-		all_vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
-		all_normals = repeat.(normals,inner=3)
-		all_colours = repeat.(colours,inner=3)
-
-		buffers!(rend.gl.mesh_buffers, [(0,all_vertices),(1,all_normals),(2,all_colours)])
-		buffers!(rend.gl.point_buffers, [(3,points)])
-		
-		viewing!(rend; scale, clip, fov, location, target)
-      return rend
-   end
+	texmaps = isempty(texmaps) ? [] : [texmaps]
+	teximgs = isempty(teximgs) ? [] : [teximgs]
+	colours = isempty(colours) ? [] : [colours]
+	pointclouds = isempty(pointclouds) ? [] : [pointclouds]
+	Renderer(image_size, [faces], [vertices], [normals];
+	         texmaps, teximgs, colours, pointclouds, etc...)
 end
-
 
 """ Compile and link shaders.
 """
@@ -368,18 +365,15 @@ function compile!(gl::GLData, vert_shader::String, frag_shader::String)
    fsh = createShader(read(frag_shader,String), GL_FRAGMENT_SHADER)
    gl.program = createShaderProgram(vsh,fsh)
    glUseProgram(gl.program)
-	gl_check()
 end
 
 """ Set default options.
 """
-function options!(rend::AbstractRenderer; 
-	               background::AbstractVector=[211,215,207]/255, 
-	               blend::Tuple{UInt32,UInt32}=(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA))
+function options!(rend::AbstractRenderer; backdrop=AbstractVector)
 
-   glClearColor(background..., 1.0)
+   glClearColor(backdrop..., 1.0)
    glEnable(GL_BLEND)
-   glBlendFunc(blend...)
+   glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA)
 	glEnable(GL_MULTISAMPLE)
    glEnable(GL_DEPTH_TEST)
    glDepthFunc(GL_LESS)
@@ -391,10 +385,9 @@ end
 """ Set the viewing parameters.
 """
 function viewing!(rend::AbstractRenderer;
-	               scale::Float64, clip::Tuple{Float64,Float64}, fov::Float64,
+	               clip::Tuple{Float64,Float64}, fov::Float64,
 	               location::AbstractVector, target::AbstractVector)
 
-   rend.view.scale = scale
    rend.view.clip = clip
    rend.view.fov = fov
    rend.view.location = location
@@ -479,14 +472,12 @@ function render(rend::AbstractRenderer)
 			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.mesh_buffers[k].ibo)
 			glDrawElements(GL_TRIANGLES, rend.gl.mesh_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
-			#glDrawArrays(GL_TRIANGLES, 0, rend.gl.mesh_buffers[k].n)
 		end
 	elseif rend.view.mode == points
 		for k in range(rend.view.select...)
 			glBindVertexArray(rend.gl.point_buffers[k].vao)
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.point_buffers[k].ibo)
 			glDrawElements(GL_POINTS, rend.gl.point_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
-			#glDrawArrays(GL_POINTS, 0, rend.gl.point_buffers[k].n)
 		end
 	end
 end
@@ -495,25 +486,28 @@ end
 """
 function update!(rend::AbstractRenderer) 
    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-   M = modelview(rend.view.location, rend.view.target, rotation=rend.view.rotation, scale=rend.view.scale)
+   M = modelview(rend.view.location, rend.view.target, rotation=rend.view.rotation)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"modelview"), 1, false, gl_vec(M))
 end
 
 """ Set interface callbacks and start the Renderer.
 """
-function (rend::AbstractRenderer)(; opts...)
+function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
 
-	options!(rend; opts...)
+	options!(rend; backdrop)
 
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
+
+	# Show the hidden window
+	GLFW.ShowWindow(rend.view.window)
 
 	# Key controls
    GLFW.SetKeyCallback(rend.view.window,
 		(window::GLFW.Window, button::GLFW.Key, code::Int32, action::GLFW.Action, mods::Int32) ->
 		begin
-			if button == GLFW.KEY_ESCAPE
-				GLFW.SetWindowShouldClose(rend.view.window,true)
+			if button == GLFW.KEY_I && action == GLFW.PRESS
+				rend("meshrender.png"; opts...)
 			
 			elseif button == GLFW.KEY_C && action == GLFW.PRESS && rend.available.colour
 				rend.view.mode = colour
@@ -549,10 +543,10 @@ function (rend::AbstractRenderer)(; opts...)
 				k = max(rend.view.select[1]-1, 1)
 				rend.view.select = (k,k)
 			
-			elseif button == GLFW.KEY_I && action == GLFW.PRESS
-				#gl_check()
-				rend("meshrender.png"; opts...)
+			elseif button == GLFW.KEY_ESCAPE
+				GLFW.SetWindowShouldClose(rend.view.window,true)
 			end
+
 			glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
 			GLFW.SetWindowTitle(rend.view.window, "Rendering mesh range $(rend.view.select)")
    	end)
@@ -620,13 +614,10 @@ function (rend::AbstractRenderer)(; opts...)
 end
 
 
-function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
+function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth,
+                                  backdrop::AbstractVector=[211,215,207]/255)
 
-display(rend.gl.image_texs)
-
-display(map(b->b.tex, rend.gl.mesh_buffers))
-
-	options!(rend; opts...)
+	options!(rend; backdrop)
 
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -637,7 +628,6 @@ display(map(b->b.tex, rend.gl.mesh_buffers))
 	if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE 
 		error("Incomplete framebuffer")
 	end
-	gl_check()
 
    # Re-render in the current mode
    update!(rend)
@@ -707,7 +697,9 @@ function test_obj()
 	TM2 = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
 	TI2 = load(tex_name)
 
-   rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scale=1.0)
+	rend = MeshRender.Renderer((1200,1200), F, V, N, texmaps=TM, teximgs=TI, centre=true)
+
+   #rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scales=[1.0,10.0])
 	#rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2])
 
 	rend()
