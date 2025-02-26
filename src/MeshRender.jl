@@ -64,10 +64,10 @@ end
 
 """ Compute the generalized arcball vector. 
 """
-function arcball_vector(window_size::GVector{2}, cursor_pos::GVector{2})
+function arcball_vector(image_size::GVector{2}, cursor_pos::GVector{2})
 	# Center and radial 2D vector
-	c = (window_size .- 1.0) ./ 2.0
-	q = (cursor_pos .- c) ./ (min(window_size...)-1.0)
+	c = (image_size .- 1.0) ./ 2.0
+	q = (cursor_pos .- c) ./ (min(image_size...)-1.0)
 	# Radial 3D vector
 	GVector{3}(q[1], -q[2], arcball_depth(q))
 end
@@ -191,9 +191,9 @@ mutable struct ViewData
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
 
-	function ViewData(window_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); visible=true, mode=colour)
+	function ViewData(image_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); visible=true, mode=colour)
 
-		view = new(window_size[1], window_size[2], select)
+		view = new(image_size[1], image_size[2], select)
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT,GL_TRUE)
@@ -224,16 +224,61 @@ mutable struct Renderer <: AbstractRenderer
 	available::NamedTuple{(:colour,:texture,:points),Tuple{Bool,Bool,Bool}}
 
    @doc """
-   Construct a `Renderer`.
+       Renderer(image_size::Tuple{Int,Int},
+                faces::Vector{<:Vector{<:SVector{3,<:Integer}}},
+                vertices::Vector{<:Vector{<:SVector{3,<:Real}}},
+                normals::Vector{<:Vector{<:SVector{3,<:Real}}};
+                texmaps::AbstractVector=[],
+                teximgs::AbstractVector=[],
+                colours::AbstractVector=[],
+                points::AbstractVector=[],
+                centre::Bool=true,
+                scale::Float64=1.0,
+                fov::Float64=60.0,
+                clip::Tuple=(),
+                location::AbstractVector=[],
+                target::AbstractVector=[0.0,0.0,0.0],
+                visible=true)
+
+   Construct a `Renderer`, using the default shaders `Vert.glsl` and `Frag.glsl`.
+   Each vector in `faces` contains the index-triples for an individual mesh, referring 
+   to the corresponding vertex attributes in `normals`, and optionally `texmaps` and/or
+   `colours`.
+
+   Alternatively, if length(`colours`)==length(`faces`) then flat per-face colouring is assumed.
+   
+   The optional `points` vector may contain a set of pointclouds, associated with the 
+   corresponding meshes in the mandatory arguments.
+
+   # Examples
+       # Multiple meshes
+       rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
+       rend()
+       # Offscreen rendering of a single mesh
+       rend = Renderer((w,h), F, V, N, visible=false)
+       rend("capture.png")
+   
+   The default camera `location` is [0,0,6`r`], where `r` is the maximum axis-aligned
+   radius of the collective bounding box.
+
+   # Keyboard controls
+   - `Tab`: Show next mesh
+   - `Backspace`: Show previous mesh
+   - `Shift`+`Tab`: Add next mesh
+   - `Shift`+`Backspace`: Remove previous mesh
+   - `c`, `t`, `d`, `p`: Render colour, texture, depth, points (where available)
+   - `o`: Render colour at 50% opacity
+   - `s`: Save image to `meshrender.png` in current directory.
+   - `Esc`: Quit
 	"""
-   function Renderer(window_size::Tuple{Int,Int},
+   function Renderer(image_size::Tuple{Int,Int},
                      faces::Vector{<:Vector{<:SVector{3,<:Integer}}},
                      vertices::Vector{<:Vector{<:SVector{3,<:Real}}},
                      normals::Vector{<:Vector{<:SVector{3,<:Real}}};
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
-							colours::AbstractVector=[],
-							points::AbstractVector=[],
+                     colours::AbstractVector=[],
+                     points::AbstractVector=[],
                      centre::Bool=true,
                      scale::Float64=1.0,
                      fov::Float64=60.0,
@@ -247,8 +292,8 @@ mutable struct Renderer <: AbstractRenderer
 
 		extents = bounding_box(vertices)
 		midpoint = SVector{3}(mean.(extents))
-		# Default viewing parameters, based on camera at distance of 3 * (max object extents).
-		zcam = 3.0 * scale * maximum(abs.(Iterators.flatten(extents)))
+		# Default viewing parameters, based on camera at distance of 3 * (max extents/2).
+		zcam = 6.0 * scale * 0.5*maximum(abs.(Iterators.flatten(extents)))
 		location = isempty(location) ? [0.0, 0.0, zcam] : location
 		clip = isempty(clip) ? (0.1*zcam, 5.0*zcam) : clip
 		if centre || scale != 1.0
@@ -265,8 +310,8 @@ mutable struct Renderer <: AbstractRenderer
 
 		mode = isempty(teximgs) ? colour : texture
 
-		rend = new(ViewData(window_size; mode),
-		           GLData(window_size, length.(faces), length.(points), vsh, fsh), 
+		rend = new(ViewData(image_size; mode),
+		           GLData(image_size, length.(faces), length.(points), vsh, fsh), 
 					  .!isempty.((colours,teximgs,points)))
 
 		buffers!(rend.gl.mesh_buffers, [(0,vertices), (1,normals), (2,texmaps), (3,colours)];
@@ -287,7 +332,7 @@ mutable struct FlatRenderer <: AbstractRenderer
    @doc """
    Construct a `FlatRenderer`.
 	"""
-   function FlatRenderer(window_size::Tuple{Int,Int}, faces::Vector{Vector{SVector{3,Ind}}}, vertices::Vector{GVectors{3}};
+   function FlatRenderer(image_size::Tuple{Int,Int}, faces::Vector{Vector{SVector{3,Ind}}}, vertices::Vector{GVectors{3}};
 							    normals::Vector{Vector{SVector{3,Coord}}},
 							    colours::Vector{GVectors{3}}=nothing,
 							    points::Vector{GVectors{3}}=nothing,
@@ -299,8 +344,8 @@ mutable struct FlatRenderer <: AbstractRenderer
 		vsh = pkgdir(@__MODULE__, "src", "FlatVert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "FlatFrag.glsl")
 
-      rend = new(ViewData(window_size),
-                 GLData(window_size, length.(faces), length.(points), vsh, fsh))
+      rend = new(ViewData(image_size),
+                 GLData(image_size, length.(faces), length.(points), vsh, fsh))
 		
 		# Expand/duplicate vertices and attributes  
 		all_vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
