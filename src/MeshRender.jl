@@ -1,21 +1,37 @@
 module MeshRender
 
-using StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO, VisionGeometry,
+# MeshRender.render_obj_meshes(["apollo/x3d-cm-exterior-shell-90k-uvs.obj", "apollo/x3d-cm-exterior-top-160k-uvs.obj"], ["apollo/x3d-cm-exterior-shell-90k-comp-4k.png", "apollo/x3d-cm-exterior-top-160k-comp-4k.png"])
+
+using StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO,
 Images, Colors, ImageTransformations, Interpolations
 
 import GeometryBasics
 
-export Renderer, FlatRenderer, __FlatRenderer, viewing!
+export Renderer, viewing!, render_obj_meshes
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
+
+function angle(v1,v2)
+	u1 = normalize(v1)
+	u2 = normalize(v2)
+	2.0 * atan(norm(u1-u2), norm(u1+u2))
+end
+
+function rotation(t::Real, v::SVector{3,<:Real})
+   u = normalize(v)
+	S = u * transpose(u)
+	Q = stack(cross.([u,u,u], eachcol(I(3))))
+   cos(t)*I + sin(t)*Q + (1.0-cos(t))*S
+end
 
 """ Construct OpenGL camera matrix from [near,far] limits (unsigned),
     field of view (degrees), and aspect ratio.
 """
 function perspective(clip::Tuple{Float64,Float64}, fov_v_deg::Float64, aspect::Float64=1.0)
    # Homogeneous perspective
-   f = 1.0/tan(radians(fov_v_deg)/2.0)
+	fov_v_rad = π*fov_v_deg/180.0
+   f = 1.0/tan(fov_v_rad/2.0)
    d = clip[2] - clip[1]
    cam = zeros(4,4)
    cam[1,1] = f / aspect
@@ -30,7 +46,7 @@ end
 """ Construct modelview matrix from coordinates of camera, 
     target, and up-vector.
 """
-function modelview(cam::GVector{3}, at::GVector{3}; up::AbstractVector=[0.0; 1.0; 0.0],
+function modelview(cam::SVector{3,<:Number}, at::SVector{3,<:Number}; up::AbstractVector=[0.0; 1.0; 0.0],
 	                rotation::Matrix{Float64}=I, scale::Float64=1.0)
    # Modelview matrix
    v = normalize(at - cam)
@@ -57,19 +73,19 @@ end
 
 """ Compute z-component of the generalized arcball vector.
 """
-function arcball_depth(v::GVector{2}, r1::Float64=1.0)
+function arcball_depth(v::SVector{2,<:Number}, r1::Float64=1.0)
 	r_sqr = v[1]^2 + v[2]^2
 	(r_sqr <= 0.5*r1^2) ? sqrt(r1^2-r_sqr) : (0.5*r1^2)/sqrt(r_sqr)
 end
 
 """ Compute the generalized arcball vector. 
 """
-function arcball_vector(image_size::GVector{2}, cursor_pos::GVector{2})
+function arcball_vector(image_size::SVector{2,<:Number}, cursor_pos::SVector{2,<:Number})
 	# Center and radial 2D vector
 	c = (image_size .- 1.0) ./ 2.0
 	q = (cursor_pos .- c) ./ (min(image_size...)-1.0)
 	# Radial 3D vector
-	GVector{3}(q[1], -q[2], arcball_depth(q))
+	SVector{3,<:Number}(q[1], -q[2], arcball_depth(q))
 end
 
 "Initialize GL vector from concatenated array"
@@ -177,7 +193,7 @@ mutable struct ViewData
    height::Int
 	select::Tuple{Int,Int}
    window::GLFW.Window
-	arc_press::GVector{3}
+	arc_press::SVector{3,<:Number}
 	arc_drag::Bool
    mode::Render
    opaque::Bool
@@ -185,8 +201,8 @@ mutable struct ViewData
 	# Geometry
 	clip::Tuple{Float64,Float64}
 	fov::Float64
-	location::GVector{3}
-	target::GVector{3}
+	location::SVector{3,<:Number}
+	target::SVector{3,<:Number}
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
 
@@ -224,9 +240,9 @@ mutable struct Renderer <: AbstractRenderer
 
    @doc """
        Renderer(image_size::Tuple{Int,Int},
-                faces::Vector{<:Vector{<:SVector{3,<:Integer}}},
-                vertices::Vector{<:Vector{<:SVector{3,<:Real}}},
-                normals::Vector{<:Vector{<:SVector{3,<:Real}}};
+                faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
+                vertices::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}},
+                normals::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}};
                 texmaps::AbstractVector=[],
                 teximgs::AbstractVector=[],
                 colours::AbstractVector=[],
@@ -236,18 +252,21 @@ mutable struct Renderer <: AbstractRenderer
                 fov::Float64=60.0,
                 clip::Tuple=(),
                 location::AbstractVector=[],
-                target::AbstractVector=[0.0,0.0,0.0])
+                target::AbstractVector=[0.0,0.0,0.0],
+                backdrop::AbstractVector=[211,215,207]/255)
 
-   Construct a `Renderer`, using the default shaders `Vert.glsl` and `Frag.glsl`.
+   Construct a `Renderer`, using the default shaders `src/Vert.glsl` and `src/Frag.glsl`.
    Each vector in `faces` contains the SVector{3,Int} indices for an individual mesh, 
    with reference to the corresponding vertex attributes in `normals`, and optionally `texmaps` 
    and/or `colours`; for example the `faces` argument [`F1`,`F2`] would index vertices [`V1`,`V2`]
    and normals [`N1`,`N2`] of two meshes. In the case of a single object, the surrounding brackets
-	are not needed.
+   are not needed.
 
-   Texture coordinates can be supplied in `texmaps`, with corresponding images in `teximgs`.
+   Texture coordinates can be supplied in `texmaps`, with corresponding images in `teximgs`. 
 
-   Alternatively, if length(`colours`)==length(`faces`) then flat per-face colouring is assumed.
+   If RGB `colours` are provided, and length(`colours`)==length(`vertices`) then per-vertex 
+   shading can also be applied. Alternatively, if length(`colours`)==length(`faces`) then flat 
+   per-face colouring is assumed. The RGB `backdrop` colour may also be specified.
    
    The optional `pointclouds` vector may contain a set of point clouds, associated with the 
    corresponding meshes (in the mandatory arguments).
@@ -262,10 +281,13 @@ mutable struct Renderer <: AbstractRenderer
    Alternative renderers, using different shaders, can be defined as subtypes of `AbstractRenderer`,
    by making appropriate use of the `buffers!()` function in the constructor.
 
+   Rendering is performed by calling `(AbstractRenderer)()`, as shown below.
+
    # Examples
-       # Multiple meshes rendered on-screen and off
+       # Render two meshes
        rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
        rend()
+       # Offscreen version
        rend("capture.png")
 
    # Keyboard controls
@@ -279,9 +301,9 @@ mutable struct Renderer <: AbstractRenderer
    - `Esc`: Quit
 	"""
    function Renderer(image_size::Tuple{Int,Int},
-                     faces::Vector{<:Vector{<:SVector{3,<:Integer}}},
-                     vertices::Vector{<:Vector{<:SVector{3,<:Real}}},
-                     normals::Vector{<:Vector{<:SVector{3,<:Real}}};
+                     faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
+                     vertices::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}},
+                     normals::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}};
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
                      colours::AbstractVector=[],
@@ -292,7 +314,7 @@ mutable struct Renderer <: AbstractRenderer
                      clip::Tuple=(),
                      location::AbstractVector=[],
                      target::AbstractVector=[0.0,0.0,0.0],
-                     visible=true)
+                     backdrop::AbstractVector=[211,215,207]/255)
 
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
@@ -312,6 +334,7 @@ mutable struct Renderer <: AbstractRenderer
 
 		# Handle per-face rendering
 		if length(faces) == length(colours)
+			@assert length(faces) == length(normals) "Per-face rendering requires corresponding normals"
 			# Expand/duplicate vertices and attributes  
 			vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
 			normals = repeat.(normals,inner=3)
@@ -334,19 +357,30 @@ mutable struct Renderer <: AbstractRenderer
 
 		# Set viewing parameters
 		viewing!(rend; clip, fov, location, target)
+		options!(rend; backdrop)
 		gl_check()
       return rend
    end
 end
 
-""" Handle the case of a single object, without having to use [F], [V], [N], etc.
+"""
+    Renderer(image_size::Tuple{Int,Int},
+             faces::AbstractVector{<:SVector{3,<:Integer}},
+             vertices::AbstractVector{<:SVector{3,<:Real}},
+             normals::AbstractVector{<:SVector{3,<:Real}};
+             texmaps::AbstractVector=[],
+             teximgs::AbstractMatrix=[],
+             colours::AbstractVector=[],
+             pointclouds::AbstractVector=[], etc...)
+
+Handle the case of a single mesh object, without having to use [F], [V], [N], etc.
 """
 function Renderer(image_size::Tuple{Int,Int},
-                  faces::Vector{<:SVector{3,<:Integer}},
-                  vertices::Vector{<:SVector{3,<:Real}},
-                  normals::Vector{<:SVector{3,<:Real}};
+                  faces::AbstractVector{<:SVector{3,<:Integer}},
+                  vertices::AbstractVector{<:SVector{3,<:Real}},
+                  normals::AbstractVector{<:SVector{3,<:Real}};
 						texmaps::AbstractVector=[],
-						teximgs::Matrix=[],
+						teximgs::AbstractMatrix=[],
 						colours::AbstractVector=[],
 						pointclouds::AbstractVector=[], etc...)
 
@@ -369,7 +403,7 @@ end
 
 """ Set default options.
 """
-function options!(rend::AbstractRenderer; backdrop=AbstractVector)
+function options!(rend::AbstractRenderer; backdrop::AbstractVector)
 
    glClearColor(backdrop..., 1.0)
    glEnable(GL_BLEND)
@@ -385,8 +419,10 @@ end
 """ Set the viewing parameters.
 """
 function viewing!(rend::AbstractRenderer;
-	               clip::Tuple{Float64,Float64}, fov::Float64,
-	               location::AbstractVector, target::AbstractVector)
+	               clip::Tuple=rend.view.clip,
+						fov::Float64=rend.view.fov,
+	               location::AbstractVector=rend.view.location,
+						target::AbstractVector=rend.view.target)
 
    rend.view.clip = clip
    rend.view.fov = fov
@@ -490,11 +526,13 @@ function update!(rend::AbstractRenderer)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"modelview"), 1, false, gl_vec(M))
 end
 
-""" Set interface callbacks and start the Renderer.
+""" @doc 
+    Set interface callbacks and start the Renderer.
 """
-function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
+function (rend::AbstractRenderer)(; opts...)
 
-	options!(rend; backdrop)
+	# Optional update of viewing parameters 
+	viewing!(rend; opts...)
 
 	# Initalize as opaque
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -559,8 +597,8 @@ function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
 				if action == GLFW.PRESS
 					# Store rotation state & start new arc
 					rend.view.rotation_pre = rend.view.rotation
-					rend.view.arc_press = arcball_vector(GVector{2}(GLFW.GetWindowSize(window)...), 
-					                                GVector{2}(GLFW.GetCursorPos(window)...))
+					rend.view.arc_press = arcball_vector(SVector{2,<:Number}(GLFW.GetWindowSize(window)...), 
+					                                SVector{2,<:Number}(GLFW.GetCursorPos(window)...))
 					rend.view.arc_drag = true
 				elseif action == GLFW.RELEASE
 					rend.view.arc_drag = false
@@ -573,7 +611,7 @@ function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
 			if rend.view.arc_drag
-				v = arcball_vector(GVector{2}(GLFW.GetWindowSize(window)...), GVector{2}(x,y))
+				v = arcball_vector(SVector{2,<:Number}(GLFW.GetWindowSize(window)...), SVector{2,<:Number}(x,y))
 				t = angle(rend.view.arc_press, v)
 				n = cross(rend.view.arc_press, v)
 				# Compose doubled differential rotation onto previous state
@@ -585,7 +623,7 @@ function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
 	GLFW.SetScrollCallback(rend.view.window,
 		(window::GLFW.Window, x::Float64, y::Float64) ->
 		begin
-			rend.view.location = rend.view.location + [0.0, 0.0, y]
+			rend.view.location = rend.view.location + [0.0, 0.0, 0.1*rend.view.location[3]*y]
 		end)
 
 	# Window resizing/reshaping
@@ -614,10 +652,10 @@ function (rend::AbstractRenderer)(; backdrop::AbstractVector=[211,215,207]/255)
 end
 
 
-function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth,
-                                  backdrop::AbstractVector=[211,215,207]/255)
+function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
 
-	options!(rend; backdrop)
+	# Optional update of viewing parameters 
+	viewing!(rend; opts...)
 
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -671,37 +709,16 @@ function attrib_matrix(indices::AbstractArray, attribs::AbstractArray)
 	return deepcopy(A)
 end
 
-function test_obj()
+function render_obj_meshes(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
+                           texnames::AbstractVector=["spot/texture.png","banana/texture.png"])
 
-	#using FileIO, GeometryBasics, VisionGeometry, MeshRender
-
-	obj_name = "spot/model.obj"
-	tex_name = "spot/texture.png"
-
-	obj = load(obj_name)
-	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(obj))
-	F = SVector{3,UInt32}.(GeometryBasics.faces(mesh))
-	V = SVector{3,Float32}.(GeometryBasics.coordinates(mesh))
-	N = SVector{3,Float32}.(GeometryBasics.normals(mesh))
-	TM = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
-	TI = load(tex_name)
-
-	obj_name = "banana/model.obj"
-	tex_name = "banana/texture.png"
-
-	obj = load(obj_name)
-	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(obj))
-	F2 = SVector{3,UInt32}.(GeometryBasics.faces(mesh))
-	V2 = SVector{3,Float32}.(GeometryBasics.coordinates(mesh))
-	N2 = SVector{3,Float32}.(GeometryBasics.normals(mesh))
-	TM2 = SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(mesh)))
-	TI2 = load(tex_name)
-
-	rend = MeshRender.Renderer((1200,1200), F, V, N, texmaps=TM, teximgs=TI, centre=true)
-
-   #rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2], texmaps=[TM,TM2], teximgs=[TI,TI2], centre=true, scales=[1.0,10.0])
-	#rend = MeshRender.Renderer((1200,1200), [F,F2], [V,V2], [N,N2])
-
+	meshes = GeometryBasics.expand_faceviews.(GeometryBasics.uv_normal_mesh.(load.(objnames)))
+	faces = map(M -> SVector{3,UInt32}.(GeometryBasics.faces(M)), meshes)
+	vertices = map(M -> SVector{3,Float32}.(GeometryBasics.coordinates(M)), meshes)
+	normals = map(M -> SVector{3,Float32}.(GeometryBasics.normals(M)), meshes)
+	texmaps = map(M -> SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(M))), meshes)
+	teximgs = load.(texnames)
+	rend = MeshRender.Renderer((1200,1200), faces, vertices, normals; texmaps, teximgs)
 	rend()
 end
 
