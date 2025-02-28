@@ -12,16 +12,21 @@ export Renderer, viewing!, render_obj_meshes
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
 
+""" Robust computation of angle between vectors
+"""
 function angle(v1,v2)
 	u1 = normalize(v1)
 	u2 = normalize(v2)
 	2.0 * atan(norm(u1-u2), norm(u1+u2))
 end
 
+""" Rotation matrix from angle and axis
+"""
 function rotation(t::Real, v::SVector{3,<:Real})
    u = normalize(v)
 	S = u * transpose(u)
 	Q = stack(cross.([u,u,u], eachcol(I(3))))
+	# Rodrigues formula
    cos(t)*I + sin(t)*Q + (1.0-cos(t))*S
 end
 
@@ -30,7 +35,7 @@ end
 """
 function perspective(clip::Tuple{Float64,Float64}, fov_v_deg::Float64, aspect::Float64=1.0)
    # Homogeneous perspective
-	fov_v_rad = π*fov_v_deg/180.0
+	fov_v_rad = fov_v_deg * π/180.0
    f = 1.0/tan(fov_v_rad/2.0)
    d = clip[2] - clip[1]
    cam = zeros(4,4)
@@ -60,17 +65,6 @@ function modelview(cam::SVector{3,<:Number}, at::SVector{3,<:Number}; up::Abstra
    Diagonal([scale,scale,scale,1]) * M * [rotation zeros(3,1); [0 0 0 1]]
 end
 
-function gl_image(window::GLFW.Window)
-   fb_size = GLFW.GetFramebufferSize(window)
-   gl_data = gl_vec(Array{UInt8,1}(undef,prod(fb_size)*4), GLubyte)
-   glPixelStorei(GL_PACK_ALIGNMENT, 4)
-   glReadBuffer(GL_FRONT)
-   glReadPixels(0, 0, GLint(fb_size[1]), GLint(fb_size[2]), 
-                GL_RGBA, GL_UNSIGNED_BYTE, pointer(gl_data))
-   colorview(RGBA, normedview(reshape(gl_data,(4,fb_size[1],fb_size[2]))))
-   imshow(img, axes=(2,1), flipy=true)
-end
-
 """ Compute z-component of the generalized arcball vector.
 """
 function arcball_depth(v::SVector{2,<:Number}, r1::Float64=1.0)
@@ -88,12 +82,14 @@ function arcball_vector(image_size::SVector{2,<:Number}, cursor_pos::SVector{2,<
 	SVector{3,<:Number}(q[1], -q[2], arcball_depth(q))
 end
 
-"Initialize GL vector from concatenated array"
+""" Initialize GL vector from concatenated array
+"""
 function gl_vec(M::AbstractArray, gl_type::DataType=GLfloat)
    Array{gl_type,1}(vec(M))
 end
 
-"Byte offset as multiple of type size"
+""" Byte offset as multiple of type size
+"""
 function ptr_offset(n::Int, T::DataType=GLfloat)
    Ptr{Cvoid}(n * sizeof(T))
 end
@@ -149,10 +145,12 @@ mutable struct GLData
 
 		# Bind offscreen framebuffer to current output
 		glGenFramebuffers(1,pointer(gl.image_fbos))
+		#gl.image_fbos[1] = glGenFramebuffer()
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fbos[1])
 
 		# Color buffer target
-		glGenTextures(1,pointer(gl.image_texs,1))
+		##glGenTextures(1,pointer(gl.image_texs,1))
+		gl.image_texs[1] = glGenTexture()
 		glBindTexture(GL_TEXTURE_2D, gl.image_texs[1])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
@@ -162,7 +160,8 @@ mutable struct GLData
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0)
 
 		# Depth buffer target
-		glGenTextures(1,pointer(gl.image_texs,2))
+		##glGenTextures(1,pointer(gl.image_texs,2))
+		gl.image_texs[2] = glGenTexture()
 		glBindTexture(GL_TEXTURE_2D, gl.image_texs[2])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, width_height..., 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
@@ -206,14 +205,14 @@ mutable struct ViewData
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
 
-	function ViewData(image_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); visible=true, mode=colour)
+	function ViewData(image_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); mode=colour)
 
 		view = new(image_size[1], image_size[2], select)
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT,GL_TRUE)
       GLFW.WindowHint(GLFW.VISIBLE, false)
-      view.window = GLFW.CreateWindow(view.width, view.height, "Rendering mesh range $(view.select)")
+      view.window = GLFW.CreateWindow(view.width, view.height, "Rendering meshes $(join(select,":"))")
       GLFW.MakeContextCurrent(view.window)
       glViewport(0,0,view.width,view.height)
 
@@ -334,7 +333,7 @@ mutable struct Renderer <: AbstractRenderer
 
 		# Handle per-face rendering
 		if length(faces) == length(colours)
-			@assert length(faces) == length(normals) "Per-face rendering requires corresponding normals"
+			@assert length(faces) == length(normals) "Per-face rendering requires face normals"
 			# Expand/duplicate vertices and attributes  
 			vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
 			normals = repeat.(normals,inner=3)
@@ -346,7 +345,7 @@ mutable struct Renderer <: AbstractRenderer
 		mode = isempty(teximgs) ? colour : texture
 
 		# Allocate ViewData and GLData objects 
-		rend = new(ViewData(image_size; mode),
+		rend = new(ViewData(image_size, (1,length(faces)); mode),
 		           GLData(image_size, length.(faces), length.(pointclouds), vsh, fsh), 
 					  .!isempty.((colours,teximgs,pointclouds)))
 
@@ -439,7 +438,8 @@ end
 
 """ Load data buffers for shaders.
 """
-function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; faces=[], teximgs=[]) where {T<:Array}
+function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; 
+                  faces=[], teximgs=[]) where {T<:Array}
 
 	# Remove any empty attribute arrays
 	attributes = filter(a -> !isempty(last(a)), attributes)
@@ -459,7 +459,8 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; fac
 		offsets = [0; cumsum(sizes)]
 		println("sizes, offsets, stride: $(sizes), $(offsets[1:end-1]), $(stride).")
 		for j in 1:length(attributes)
-			glVertexAttribPointer(first(attributes[j]), sizes[j], GL_FLOAT, GL_FALSE, stride, ptr_offset(offsets[j]))
+			glVertexAttribPointer(first(attributes[j]), sizes[j], GL_FLOAT, GL_FALSE,
+			                      stride, ptr_offset(offsets[j]))
 			glEnableVertexAttribArray(first(attributes[j]))
 		end
 
@@ -502,7 +503,6 @@ end
 """
 function render(rend::AbstractRenderer)
    if rend.view.mode == colour || rend.view.mode == depth || rend.view.mode == texture
-
 		for k in range(rend.view.select...)
 			glUniform1i(glGetUniformLocation(rend.gl.program,"teximg"), k-1)
 			glBindVertexArray(rend.gl.mesh_buffers[k].vao)
@@ -526,8 +526,7 @@ function update!(rend::AbstractRenderer)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"modelview"), 1, false, gl_vec(M))
 end
 
-""" @doc 
-    Set interface callbacks and start the Renderer.
+""" Set interface callbacks and start the Renderer.
 """
 function (rend::AbstractRenderer)(; opts...)
 
@@ -586,7 +585,7 @@ function (rend::AbstractRenderer)(; opts...)
 			end
 
 			glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
-			GLFW.SetWindowTitle(rend.view.window, "Rendering mesh range $(rend.view.select)")
+			GLFW.SetWindowTitle(rend.view.window, "Rendering meshes $(join(rend.view.select,":"))")
    	end)
 
 	# Arcball button controls
@@ -684,29 +683,9 @@ function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, o
    save(file, transpose(image[:,end:-1:1]))
 end
 
-##################################
-
 function simulate_depthcam(depth)
    tmp = imresize(depth, (400,400), method=BSpline(Constant()))
    imresize(tmp, (1600,1600), method=BSpline(Constant()))
-end
-
-function attrib_matrix(indices::AbstractArray, attribs::AbstractArray)
-	# Flatten indices and remove duplicates
-	J = unique(reduce(vcat,indices))
-
-	# Length of concatenated arributes 
-	m = sum(length.(first.(attribs)))
-
-	# Raw matrix to hold attributes in columns
-	A = Array{Float32}(undef, m, maximum(J))
-
-	println("Constructed $(size(A)) attribute array")
-
-	# Assignment
-	A[:,J] .= stack(vcat.(map(a->a[J],attribs)...))
-
-	return deepcopy(A)
 end
 
 function render_obj_meshes(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
