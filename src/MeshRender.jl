@@ -2,12 +2,12 @@ module MeshRender
 
 # MeshRender.render_obj_meshes(["apollo/x3d-cm-exterior-shell-90k-uvs.obj", "apollo/x3d-cm-exterior-top-160k-uvs.obj"], ["apollo/x3d-cm-exterior-shell-90k-comp-4k.png", "apollo/x3d-cm-exterior-top-160k-comp-4k.png"])
 
-using StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO,
+using Distributed, StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO,
 Images, Colors, ImageTransformations, Interpolations
 
 import GeometryBasics
 
-export Renderer, viewing!, render_obj_meshes
+export Renderer, viewing!, render_objs
 
 # Auxiliary files
 include(pkgdir(ModernGL, "test", "util.jl"))
@@ -105,6 +105,8 @@ abstract type AbstractRenderer end
 
 @enum Render colour=1 depth=2 points=3 texture=4
 
+""" Low-level OpenGL representation of a single mesh.
+"""
 struct GLBuffers
 	vao::GLuint
 	vbo::GLuint
@@ -116,6 +118,8 @@ struct GLBuffers
 	end
 end
 
+""" Complete OpenGL representation, containing vertex, index, framebuffer and texture data.
+"""
 mutable struct GLData
 
 	program::GLuint
@@ -186,6 +190,8 @@ mutable struct GLData
 	end
 end
 
+""" High-level viewing geometry and state variables.
+"""
 mutable struct ViewData
 	# Interface
 	width::Int
@@ -457,7 +463,7 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}};
 		sizes = first.(size.(first.(attribs)))
 		stride = GLsizei.(sum(sizes) * sizeof(GLfloat))
 		offsets = [0; cumsum(sizes)]
-		println("sizes, offsets, stride: $(sizes), $(offsets[1:end-1]), $(stride).")
+		println("Attribute sizes: $(sizes), offsets: $(offsets[1:end-1]), stride: $(stride).")
 		for j in 1:length(attributes)
 			glVertexAttribPointer(first(attributes[j]), sizes[j], GL_FLOAT, GL_FALSE,
 			                      stride, ptr_offset(offsets[j]))
@@ -688,14 +694,20 @@ function simulate_depthcam(depth)
    imresize(tmp, (1600,1600), method=BSpline(Constant()))
 end
 
-function render_obj_meshes(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
-                           texnames::AbstractVector=["spot/texture.png","banana/texture.png"])
+"""
+    render_objs(objnames::AbstractVector; texnames::AbstractVector=[])
+
+Load a list of OBJ mesh files, with corresponding textures, and render them using default options.
+An intermediate `GeometryBasics` representation is used, in order to decompose the meshes.
+"""
+function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
+                     texnames::AbstractVector=["spot/texture.png","banana/texture.png"])
 
 	meshes = GeometryBasics.expand_faceviews.(GeometryBasics.uv_normal_mesh.(load.(objnames)))
-	faces = map(M -> SVector{3,UInt32}.(GeometryBasics.faces(M)), meshes)
-	vertices = map(M -> SVector{3,Float32}.(GeometryBasics.coordinates(M)), meshes)
-	normals = map(M -> SVector{3,Float32}.(GeometryBasics.normals(M)), meshes)
-	texmaps = map(M -> SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(M))), meshes)
+	faces = pmap(M -> SVector{3,UInt32}.(GeometryBasics.faces(M)), meshes)
+	vertices = pmap(M -> SVector{3,Float32}.(GeometryBasics.coordinates(M)), meshes)
+	normals = pmap(M -> SVector{3,Float32}.(GeometryBasics.normals(M)), meshes)
+	texmaps = pmap(M -> SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(M))), meshes)
 	teximgs = load.(texnames)
 	rend = MeshRender.Renderer((1200,1200), faces, vertices, normals; texmaps, teximgs)
 	rend()
