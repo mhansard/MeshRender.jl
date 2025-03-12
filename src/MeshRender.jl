@@ -337,18 +337,26 @@ mutable struct Renderer <: AbstractRenderer
 								vertices)
 		end
 
-		# Handle per-face rendering
-		if length(faces) == length(colours)
-			@assert length(faces) == length(normals) "Per-face rendering requires face normals"
-			# Expand/duplicate vertices and attributes  
-			vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
-			normals = repeat.(normals,inner=3)
-			colours = repeat.(colours,inner=3)
-			faces = map(V -> 1:length(V), vertices)
+		# Handle the implied rendering mode
+		if isempty(teximgs)
+			mode = colour
+			if length(colours) == length(faces)
+				# Per-face colours provided
+				@assert length(faces) == length(normals) "Per-face rendering requires face normals"
+				# Expand/duplicate vertices and attributes  
+				vertices = map((F,V) -> V[reduce(vcat,F)], faces, vertices)
+				normals = repeat.(normals,inner=3)
+				colours = repeat.(colours,inner=3)
+				faces = map(V -> 1:length(V), vertices)
+			else
+				# Neither texture nor colour provided -- use white vertex colours
+				colours = map(n -> fill(@SVector[1.0,1.0,1.0],n), length.(vertices))
+			end
+		elseif length(texmaps) == length(teximgs) == length(faces)
+			mode = texture
+		else
+			error("Inconsistent number of textures (or colour arrays).")
 		end
-
-		# Set initial rendering mode
-		mode = isempty(teximgs) ? colour : texture
 
 		# Allocate ViewData and GLData objects 
 		rend = new(ViewData(image_size, (1,length(faces)); mode),
@@ -707,8 +715,13 @@ function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.o
 	faces = pmap(M -> SVector{3,UInt32}.(GeometryBasics.faces(M)), meshes)
 	vertices = pmap(M -> SVector{3,Float32}.(GeometryBasics.coordinates(M)), meshes)
 	normals = pmap(M -> SVector{3,Float32}.(GeometryBasics.normals(M)), meshes)
-	texmaps = pmap(M -> SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(M))), meshes)
-	teximgs = load.(texnames)
+	if !isempty(texnames)
+		texmaps = pmap(M -> SVector{2,Float32}.(GeometryBasics.values(GeometryBasics.texturecoordinates(M))), meshes)
+		teximgs = load.(texnames)
+	else 
+		texmaps = []
+		teximgs = []
+	end
 	rend = MeshRender.Renderer((1200,1200), faces, vertices, normals; texmaps, teximgs)
 	rend()
 end
