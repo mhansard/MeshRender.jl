@@ -483,9 +483,9 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}};
 
 		# Textures
 		if !isempty(teximgs)
-			# Flip and cast image.
-			img = reinterpret(GLubyte, transpose(teximgs[i][end:-1:1,:]))
+			# Flip image
 			num_channels = length(teximgs[i][1])
+			img = transpose(reverse(teximgs[i],dims=1))
 			if num_channels == 3
 				fmt = GL_RGB
 			elseif num_channels == 4
