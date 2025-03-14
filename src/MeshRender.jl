@@ -61,8 +61,8 @@ function modelview(cam::SVector{3,<:Number}, at::SVector{3,<:Number}; up::Abstra
    M = [ n' -dot(n,cam);
          u' -dot(u,cam);
         -v'  dot(v,cam); 
-         0 0 0 1 ]
-   Diagonal([scale,scale,scale,1]) * M * [rotation zeros(3,1); [0 0 0 1]]
+         0.0 0.0 0.0 1.0 ]
+   Diagonal([scale,scale,scale,1]) * M * [rotation zeros(3,1); [0.0 0.0 0.0 1.0]]
 end
 
 """ Compute z-component of the generalized arcball vector.
@@ -491,9 +491,10 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}};
 
 		# Textures
 		if !isempty(teximgs)
-			# Flip image
 			num_channels = length(teximgs[i][1])
-			img = transpose(reverse(teximgs[i],dims=1))
+			# Assuming texture coordinates vec2(1.0-texmap.t,texmap.s) in shader, otherwise:
+			# img = transpose(reverse(teximgs[i],dims=1))
+			img = teximgs[i]
 			if num_channels == 3
 				fmt = GL_RGB
 			elseif num_channels == 4

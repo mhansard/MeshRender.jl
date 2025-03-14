@@ -37,7 +37,8 @@ void main()
 	}
 	else if(render_mode == 4) {
 		gl_Position = projection * modelview * vec4(vertex,1.0);
-		m = texmap;
+		// Flip texture coords
+		m = vec2(1.0-texmap.t, texmap.s);
 		n = normalize((modelview * vec4(normal,0.0)).xyz);
 		s = normalize(light - vertex.xyz);
 	}
