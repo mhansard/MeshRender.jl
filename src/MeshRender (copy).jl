@@ -1,6 +1,5 @@
 module MeshRender
 
-# To test on data from https://3d.si.edu/
 # MeshRender.render_obj_meshes(["apollo/x3d-cm-exterior-shell-90k-uvs.obj", "apollo/x3d-cm-exterior-top-160k-uvs.obj"], ["apollo/x3d-cm-exterior-shell-90k-comp-4k.png", "apollo/x3d-cm-exterior-top-160k-comp-4k.png"])
 
 using Distributed, StaticArrays, LinearAlgebra, StatsBase, GLFW, ModernGL, FileIO,
@@ -9,6 +8,9 @@ Images, Colors, ImageTransformations, Interpolations, GLAbstraction
 import GeometryBasics
 
 export Renderer, viewing!, render_objs
+
+# Auxiliary files
+# include(pkgdir(ModernGL, "test", "util.jl"))
 
 """ Robust computation of angle between vectors
 """
@@ -106,12 +108,13 @@ abstract type AbstractRenderer end
 """ Low-level OpenGL representation of a single mesh.
 """
 struct GLBuffers
-	vao::Base.RefValue{GLuint}
-	vbo::Base.RefValue{GLuint}
-	ibo::Base.RefValue{GLuint}
-	tex::Base.RefValue{GLuint}
+	vao::Base.RefValue{GLuint} # ::GLuint
+	vbo::Base.RefValue{GLuint} # ::GLuint
+	ibo::Base.RefValue{GLuint} # ::GLuint
+	tex::Base.RefValue{GLuint} # ::GLuint
 	n::GLuint
 	function GLBuffers(n::Int)
+		#new(glGenVertexArray(), glGenBuffer(), glGenBuffer(), glGenTexture(), n)
 		buffers = new(Ref(GLuint(0)), Ref(GLuint(0)), Ref(GLuint(0)), Ref(GLuint(0)), n)
 		glGenVertexArrays(1, buffers.vao)
 		glGenBuffers(1, buffers.vbo)
@@ -152,10 +155,12 @@ mutable struct GLData
 
 		# Bind offscreen framebuffer to current output
 		glGenFramebuffers(1,pointer(gl.image_fbos))
+		#gl.image_fbos[1] = glGenFramebuffer()
 		glBindFramebuffer(GL_FRAMEBUFFER, gl.image_fbos[1])
 
 		# Color buffer target
 		glGenTextures(1,pointer(gl.image_texs,1))
+		##gl.image_texs[1] = glGenTexture()
 		glBindTexture(GL_TEXTURE_2D, gl.image_texs[1])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
@@ -166,6 +171,7 @@ mutable struct GLData
 
 		# Depth buffer target
 		glGenTextures(1,pointer(gl.image_texs,2))
+		##gl.image_texs[2] = glGenTexture()
 		glBindTexture(GL_TEXTURE_2D, gl.image_texs[2])
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, width_height..., 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, ptr_offset(0))
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
@@ -466,8 +472,8 @@ end
 function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}}; 
                   faces=[], teximgs=[]) where {T<:Array}
 
-	# Remove any empty attribute arrays [] or [[]]
-	attributes = filter(a -> !isempty(last(a)) && !all(isempty.(last(a))), attributes)
+	# Remove any empty attribute arrays
+	attributes = filter(a -> !isempty(last(a)), attributes)
 
 	for i in 1:length(bufs)
 
@@ -482,7 +488,7 @@ function buffers!(bufs::Vector{GLBuffers}, attributes::Vector{Tuple{Int,T}};
 		sizes = first.(size.(first.(attribs)))
 		stride = GLsizei.(sum(sizes) * sizeof(GLfloat))
 		offsets = [0; cumsum(sizes)]
-		# println("Attribute sizes: $(sizes), offsets: $(offsets[1:end-1]), stride: $(stride).")
+		println("Attribute sizes: $(sizes), offsets: $(offsets[1:end-1]), stride: $(stride).")
 		for j in 1:length(attributes)
 			glVertexAttribPointer(first(attributes[j]), sizes[j], GL_FLOAT, GL_FALSE,
 			                      stride, ptr_offset(offsets[j]))
