@@ -126,7 +126,7 @@ end
 mutable struct GLData
 
 	program::GLuint
-	mesh_buffers::Vector{GLBuffers}
+	triangle_buffers::Vector{GLBuffers}
 	point_buffers::Vector{GLBuffers}
 	image_texs::Vector{GLuint}
 	image_fbos::Vector{GLuint}
@@ -140,7 +140,7 @@ mutable struct GLData
 		gl = new(0, Vector{GLBuffers}(), Vector{GLBuffers}())
 
 		for m in mesh_counts
-			push!(gl.mesh_buffers, GLBuffers(3*m))
+			push!(gl.triangle_buffers, GLBuffers(3*m))
 		end
 
 		for n in point_counts
@@ -321,6 +321,13 @@ mutable struct Renderer <: AbstractRenderer
                      target::AbstractVector=[0.0,0.0,0.0],
                      backdrop::AbstractVector=[211,215,207]/255)
 
+		# This subtypes AbstractRenderer by providing Vertex/Fragment shaders, and calling buffers!
+		# to set up e.g. [(0,vertices), (1,normals), ...] for the corresponding shader attributes
+		# layout(location=0) in vec3 vertex;
+      # layout(location=1) in vec3 normal;
+		# ...
+		# The triangle_buffers and point_buffers are rendered as GL_TRIANGLES and LG_POINTS respectively.
+
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
@@ -364,7 +371,7 @@ mutable struct Renderer <: AbstractRenderer
 					  .!isempty.((colours,teximgs,pointclouds)))
 
 		# Initialize GLData objects
-		buffers!(rend.gl.mesh_buffers, [(0,vertices), (1,normals), (2,texmaps), (3,colours)];
+		buffers!(rend.gl.triangle_buffers, [(0,vertices), (1,normals), (2,texmaps), (3,colours)];
 		         faces, teximgs)
 		buffers!(rend.gl.point_buffers, [(4,pointclouds)])
 
@@ -531,9 +538,9 @@ function render(rend::AbstractRenderer)
    if rend.view.mode == colour || rend.view.mode == depth || rend.view.mode == texture
 		for k in range(rend.view.select...)
 			glUniform1i(glGetUniformLocation(rend.gl.program,"teximg"), k-1)
-			glBindVertexArray(rend.gl.mesh_buffers[k].vao[])
-			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.mesh_buffers[k].ibo[])
-			glDrawElements(GL_TRIANGLES, rend.gl.mesh_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
+			glBindVertexArray(rend.gl.triangle_buffers[k].vao[])
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, rend.gl.triangle_buffers[k].ibo[])
+			glDrawElements(GL_TRIANGLES, rend.gl.triangle_buffers[k].n, GL_UNSIGNED_INT, ptr_offset(0))
 		end
 	elseif rend.view.mode == points
 		for k in range(rend.view.select...)
@@ -590,7 +597,7 @@ function (rend::AbstractRenderer)(; opts...)
 
 			elseif mods == GLFW.MOD_SHIFT && button == GLFW.KEY_TAB && action == GLFW.PRESS
 				# Add subsequent mesh
-				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.mesh_buffers)))
+				rend.view.select = (rend.view.select[1], min(rend.view.select[2]+1, length(rend.gl.triangle_buffers)))
 		
 			elseif mods == GLFW.MOD_SHIFT && button == GLFW.KEY_BACKSPACE && action == GLFW.PRESS
 				# Remove last mesh
@@ -598,7 +605,7 @@ function (rend::AbstractRenderer)(; opts...)
 			
 			elseif button == GLFW.KEY_TAB && action == GLFW.PRESS
 				# Merge and increment the indices
-				k = min(rend.view.select[1]+1, length(rend.gl.mesh_buffers))
+				k = min(rend.view.select[1]+1, length(rend.gl.triangle_buffers))
 				rend.view.select = (k,k)
 
 			elseif button == GLFW.KEY_BACKSPACE && action == GLFW.PRESS
