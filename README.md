@@ -10,6 +10,7 @@ Texture maps, per-vertex, and per-face colours are supported. Sub-typing of the 
 # Render two meshes
 rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
 rend()
+
 # Offscreen version
 rend("view.png")
 ```
