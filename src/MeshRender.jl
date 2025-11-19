@@ -111,12 +111,14 @@ struct GLBuffers
 	ibo::Base.RefValue{GLuint}
 	tex::Base.RefValue{GLuint}
 	n::GLuint
-	function GLBuffers(n::Int)
+	function GLBuffers(n::Int, textured::Bool=true)
 		buffers = new(Ref(GLuint(0)), Ref(GLuint(0)), Ref(GLuint(0)), Ref(GLuint(0)), n)
-		glGenVertexArrays(1, buffers.vao)
-		glGenBuffers(1, buffers.vbo)
-		glGenBuffers(1, buffers.ibo)
-		glGenTextures(1, buffers.tex)
+		glGenVertexArrays(1,buffers.vao)
+		glGenBuffers(1,buffers.vbo)
+		glGenBuffers(1,buffers.ibo)
+		if textured
+			glGenTextures(1,buffers.tex)
+		end
 		return buffers
 	end
 end
@@ -144,7 +146,7 @@ mutable struct GLData
 		end
 
 		for n in point_counts
-			push!(gl.point_buffers, GLBuffers(n))
+			push!(gl.point_buffers, GLBuffers(n,false))
 		end
 
 		gl.image_fbos = Array{GLuint,1}(undef,1)
@@ -162,7 +164,7 @@ mutable struct GLData
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0) ###
 
 		# Depth buffer target
 		glGenTextures(1,pointer(gl.image_texs,2))
@@ -172,7 +174,7 @@ mutable struct GLData
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_texs[2], 0)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_texs[2], 0) ###
 
 		# Location 0 in fragment shader output 
 		gl.draw_buffers = Array{GLenum,1}(undef,1)
@@ -286,14 +288,17 @@ mutable struct Renderer <: AbstractRenderer
    Alternative renderers, using different shaders, can be defined as subtypes of `AbstractRenderer`,
    by making appropriate use of the `buffers!()` function in the constructor.
 
-   Rendering is performed by calling `(AbstractRenderer)()`, as shown below.
+   Rendering is performed by calling `rend()`, as shown below, where `rend` is a sub
 
-   # Examples
+   # Schematic example
        # Render two meshes
        rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
        rend()
        # Offscreen version
        rend("capture.png")
+
+	# Practical example
+	    
 
    # Keyboard controls
    - `Tab`: Show next mesh
@@ -319,15 +324,16 @@ mutable struct Renderer <: AbstractRenderer
                      clip::Tuple=(),
                      location::AbstractVector=[],
                      target::AbstractVector=[0.0,0.0,0.0],
-                     backdrop::AbstractVector=[211,215,207]/255)
+                     backdrop::AbstractVector=[211,215,0]/255)
 
 		# This subtypes AbstractRenderer by providing Vertex/Fragment shaders, and calling buffers!
-		# to set up e.g. [(0,vertices), (1,normals), ...] for the corresponding shader attributes
+		# to set up e.g. [(0,vertices), (1,normals)] for the corresponding shader attributes
 		# layout(location=0) in vec3 vertex;
       # layout(location=1) in vec3 normal;
-		# ...
-		# The triangle_buffers and point_buffers are rendered as GL_TRIANGLES and LG_POINTS respectively.
+		# The triangle_buffers and point_buffers will ultimately be rendered as GL_TRIANGLES and 
+		# GL_POINTS respectively.
 
+		# Shader code
 		vsh = pkgdir(@__MODULE__, "src", "Vert.glsl")
 		fsh = pkgdir(@__MODULE__, "src", "Frag.glsl")
 
@@ -576,7 +582,7 @@ function (rend::AbstractRenderer)(; opts...)
    GLFW.SetKeyCallback(rend.view.window,
 		(window::GLFW.Window, button::GLFW.Key, code::Int32, action::GLFW.Action, mods::Int32) ->
 		begin
-			if button == GLFW.KEY_I && action == GLFW.PRESS
+			if button == GLFW.KEY_S && action == GLFW.PRESS
 				rend("meshrender.png"; opts...)
 			
 			elseif button == GLFW.KEY_C && action == GLFW.PRESS && rend.available.colour
@@ -687,7 +693,7 @@ end
 function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
 
 	# Optional update of viewing parameters 
-	viewing!(rend; opts...)
+	# viewing!(rend; opts...)
 
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -702,14 +708,16 @@ function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, o
    # Re-render in the current mode
    update!(rend)
    render(rend)
+
 	# Reset to display
 	glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-	# Read from texture
+	# Read via texture -- without overwriting mesh textures
+	glActiveTexture(GL_TEXTURE0 + length(rend.gl.triangle_buffers))
 	glBindTexture(GL_TEXTURE_2D, rend.gl.image_texs[1])
    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pointer(rend.gl.data))
 
-   println("depth range: $(extrema(Float64.(rend.gl.data)))")
+   # println("depth range: $(extrema(Float64.(rend.gl.data)))")
 
    image = colorview(RGBA, normedview(reshape(rend.gl.data, (4,rend.view.width,rend.view.height))))
 
