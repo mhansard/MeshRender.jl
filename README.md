@@ -7,7 +7,7 @@ Texture maps, per-vertex, and per-face colours are supported. Sub-typing of the 
 ## Schematic example
 
 ```
-# Render two meshes in window of size `w` × `h`
+# Render two meshes in window of size w×h
 rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
 rend()
 
