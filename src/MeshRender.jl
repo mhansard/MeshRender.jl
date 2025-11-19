@@ -164,7 +164,7 @@ mutable struct GLData
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0) ###
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.image_texs[1], 0)
 
 		# Depth buffer target
 		glGenTextures(1,pointer(gl.image_texs,2))
@@ -174,7 +174,7 @@ mutable struct GLData
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_texs[2], 0) ###
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gl.image_texs[2], 0)
 
 		# Location 0 in fragment shader output 
 		gl.draw_buffers = Array{GLenum,1}(undef,1)
@@ -262,54 +262,32 @@ mutable struct Renderer <: AbstractRenderer
                 target::AbstractVector=[0.0,0.0,0.0],
                 backdrop::AbstractVector=[211,215,207]/255)
 
-   Construct a `Renderer`, using the default shaders `src/Vert.glsl` and `src/Frag.glsl`.
-   Each vector in `faces` contains the SVector{3,Int} indices for an individual mesh, 
-   with reference to the corresponding vertex attributes in `normals`, and optionally `texmaps` 
-   and/or `colours`; for example the `faces` argument [`F1`,`F2`] would index vertices [`V1`,`V2`]
-   and normals [`N1`,`N2`] of two meshes. In the case of a single object, the surrounding brackets
-   are not needed.
+- Construct a `Renderer`, using the default shaders `src/Vert.glsl` and `src/Frag.glsl`. Each vector in `faces` contains the `SVector{3,Int}` indices for an individual mesh, with reference to the corresponding vertex attributes in `vertices`, `normals`, and optionally `texmaps` and/or `colours`. For example the `faces` argument [`F1`,`F2`] would index vertices [`V1`,`V2`] and normals [`N1`,`N2`] of two meshes, respectively. In the case of a single object, the surrounding square	brackets are not needed. 
+- Rendering is performed by calling `rend()`, as shown below.
+- Texture coordinates can be supplied in `texmaps`, with corresponding images in `teximgs`. If RGB `colours` are provided, and length(`colours`)==length(`vertices`) then per-vertex shading can also be applied. Alternatively, if length(`colours`)==length(`faces`) then flat per-face colouring is assumed. The RGB `backdrop` colour may also be specified.
+- The optional `pointclouds` vector may contain a set of point clouds, associated with the corresponding meshes (in the mandatory arguments).
+- If `centre`=true then the meshes are centred on the midpoint of the collective bounding box, with an optional overall `scale` applied to the vertices. Viewing parameters are set by `fov` (degrees) and `clip`=(near,far). The default camera `location` is [0,0,6`r`], where `r` is the maximum axis-aligned radius of the collective bounding box. The default `target` of the camera is the origin `[0,0,0]`.
+- Alternative renderers, using different shaders, can be defined as subtypes of `AbstractRenderer`, by making appropriate use of the `buffers!()` method in the constructor.
 
-   Texture coordinates can be supplied in `texmaps`, with corresponding images in `teximgs`. 
+# Keyboard controls
+- `Tab`: Show next mesh
+- `Backspace`: Show previous mesh
+- `Shift`+`Tab`: Add next mesh
+- `Shift`+`Backspace`: Remove previous mesh
+- `c`, `t`, `d`, `p`: Render colour, texture, depth, points (where available)
+- `o`: Render colour at 50% opacity
+- `s`: Save image to `meshrender.png` in current directory.
+- `Esc`: Quit
 
-   If RGB `colours` are provided, and length(`colours`)==length(`vertices`) then per-vertex 
-   shading can also be applied. Alternatively, if length(`colours`)==length(`faces`) then flat 
-   per-face colouring is assumed. The RGB `backdrop` colour may also be specified.
-   
-   The optional `pointclouds` vector may contain a set of point clouds, associated with the 
-   corresponding meshes (in the mandatory arguments).
-
-   If `centre`=true then the meshes are centred on the midpoint of the collective bounding box,
-   with an optional overall `scale` applied to the vertices.
-
-   Viewing parameters are set by `fov` (degrees) and `clip`=(near,far). The default camera 
-   `location` is [0,0,6`r`], where `r` is the maximum axis-aligned radius of the collective 
-   bounding box. The default `target` of the camera is the origin [0,0,0].
-
-   Alternative renderers, using different shaders, can be defined as subtypes of `AbstractRenderer`,
-   by making appropriate use of the `buffers!()` function in the constructor.
-
-   Rendering is performed by calling `rend()`, as shown below, where `rend` is a sub
-
-   # Schematic example
-       # Render two meshes
-       rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
-       rend()
-       # Offscreen version
-       rend("capture.png")
-
-	# Practical example
-	    
-
-   # Keyboard controls
-   - `Tab`: Show next mesh
-   - `Backspace`: Show previous mesh
-   - `Shift`+`Tab`: Add next mesh
-   - `Shift`+`Backspace`: Remove previous mesh
-   - `c`, `t`, `d`, `p`: Render colour, texture, depth, points (where available)
-   - `o`: Render colour at 50% opacity
-   - `s`: Save image to `meshrender.png` in current directory.
-   - `Esc`: Quit
-	"""
+# Schematic example
+```
+# Render two meshes
+rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
+rend()
+# Offscreen version
+rend("view.png")
+```
+"""
    function Renderer(image_size::Tuple{Int,Int},
                      faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
                      vertices::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}},
@@ -389,18 +367,7 @@ mutable struct Renderer <: AbstractRenderer
    end
 end
 
-"""
-    Renderer(image_size::Tuple{Int,Int},
-             faces::AbstractVector{<:SVector{3,<:Integer}},
-             vertices::AbstractVector{<:SVector{3,<:Real}},
-             normals::AbstractVector{<:SVector{3,<:Real}};
-             texmaps::AbstractVector=[],
-             teximgs::AbstractMatrix=[],
-             colours::AbstractVector=[],
-             pointclouds::AbstractVector=[], etc...)
 
-Handle the case of a single mesh object, without having to use [F], [V], [N], etc.
-"""
 function Renderer(image_size::Tuple{Int,Int},
                   faces::AbstractVector{<:SVector{3,<:Integer}},
                   vertices::AbstractVector{<:SVector{3,<:Real}},
@@ -453,7 +420,14 @@ function options!(rend::AbstractRenderer; backdrop::AbstractVector)
    glEnable(GL_PROGRAM_POINT_SIZE)
 end
 
-""" Set the viewing parameters.
+"""
+    viewing!(rend::AbstractRenderer;
+             clip::Tuple=rend.view.clip,
+             fov::Float64=rend.view.fov,
+             location::AbstractVector=rend.view.location,
+             target::AbstractVector=rend.view.target)
+
+Override the default viewing parameters in `Renderer()`, as described in [`MeshRender.Renderer`](@ref) above.
 """
 function viewing!(rend::AbstractRenderer;
 	               clip::Tuple=rend.view.clip,
@@ -730,13 +704,30 @@ function simulate_depthcam(depth)
 end
 
 """
-    render_objs(objnames::AbstractVector; texnames::AbstractVector=[])
+    render_objs(objnames::AbstractVector, texnames::AbstractVector)
 
 Load a list of OBJ mesh files, with corresponding textures, and render them using default options.
-An intermediate `GeometryBasics` representation is used, in order to decompose the meshes.
+
+\\
+
+# Example
+```
+# Data from https://3d.si.edu/collections/apollo11
+
+objs = ["apollo/x3d-cm-exterior-shell-90k-uvs.obj", 
+         "apollo/x3d-cm-exterior-top-160k-uvs.obj"]
+
+pngs = ["apollo/x3d-cm-exterior-shell-90k-comp-4k.png",
+        "apollo/x3d-cm-exterior-top-160k-comp-4k.png"]
+
+MeshRender.render_objs(objs,pngs)
+
+```
 """
 function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
                      texnames::AbstractVector=["spot/texture.png","banana/texture.png"])
+
+	# Use GeometryBasics to decompose the meshes
 
 	meshes = GeometryBasics.expand_faceviews.(GeometryBasics.uv_normal_mesh.(load.(objnames)))
 	faces = pmap(M -> SVector{3,UInt32}.(GeometryBasics.faces(M)), meshes)
