@@ -7,7 +7,7 @@ MeshRender.Renderer
 ```
 
 ```@docs
-MeshRender.(rend::AbstractRenderer)(; opts...)
+MeshRender.AbstractRenderer
 ```
 
 ```@docs

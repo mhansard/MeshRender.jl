@@ -41,6 +41,7 @@ MeshRender.render_objs(objs,pngs)
 ## Installation and loading
 
 Clone the repository, and run the following in Julia:
+* `using Pkg` 
 * `Pkg.dev("/yourpath/MeshRender.jl")`
 * `using MeshRender`
 

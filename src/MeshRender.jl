@@ -159,7 +159,7 @@ mutable struct GLData
 		# Color buffer target
 		glGenTextures(1,pointer(gl.image_texs,1))
 		glBindTexture(GL_TEXTURE_2D, gl.image_texs[1])
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width_height..., 0, GL_RGB, GL_UNSIGNED_BYTE, ptr_offset(0))
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width_height..., 0, GL_RGBA, GL_UNSIGNED_BYTE, ptr_offset(0)) ###
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -302,7 +302,7 @@ rend("view.png")
                      clip::Tuple=(),
                      location::AbstractVector=[],
                      target::AbstractVector=[0.0,0.0,0.0],
-                     backdrop::AbstractVector=[211,215,0]/255)
+                     backdrop::AbstractVector=[211,215,207]/255)
 
 		# This subtypes AbstractRenderer by providing Vertex/Fragment shaders, and calling buffers!
 		# to set up e.g. [(0,vertices), (1,normals)] for the corresponding shader attributes
@@ -409,7 +409,7 @@ end
 """
 function options!(rend::AbstractRenderer; backdrop::AbstractVector)
 
-   glClearColor(backdrop..., 1.0)
+   length(backdrop)==4 ? glClearColor(backdrop...) : glClearColor(backdrop...,1.0) 
    glEnable(GL_BLEND)
    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA)
 	glEnable(GL_MULTISAMPLE)
@@ -433,13 +433,14 @@ function viewing!(rend::AbstractRenderer;
 	               clip::Tuple=rend.view.clip,
 						fov::Float64=rend.view.fov,
 	               location::AbstractVector=rend.view.location,
-						target::AbstractVector=rend.view.target)
+						target::AbstractVector=rend.view.target,
+						orientation::AbstractMatrix=I(3))
 
    rend.view.clip = clip
    rend.view.fov = fov
    rend.view.location = location
    rend.view.target = target
-	rend.view.rotation = I(3)
+	rend.view.rotation = orientation
 	rend.view.rotation_pre = I(3)
 
    glUniform1f(glGetUniformLocation(rend.gl.program,"near"), GLfloat(rend.view.clip[1]))
@@ -539,7 +540,10 @@ function update!(rend::AbstractRenderer)
    glUniformMatrix4fv(glGetUniformLocation(rend.gl.program,"modelview"), 1, false, gl_vec(M))
 end
 
-""" Set interface callbacks and start the Renderer.
+"""
+    (rend::AbstractRenderer)(; opts...)
+
+Set interface callbacks and start the `Renderer` instance, e.g. `rend()`.
 """
 function (rend::AbstractRenderer)(; opts...)
 
@@ -663,11 +667,20 @@ function (rend::AbstractRenderer)(; opts...)
 	GLFW.Terminate()
 end
 
+"""
+    (rend::AbstractRenderer)(file::String; opts...)
 
-function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, opts...)
+Perform direct offscreen rendering, with the given options, e.g. `rend("view.png")`.
+"""
+function (rend::AbstractRenderer)(file::String; backdrop::Bool=true, opts...)
 
 	# Optional update of viewing parameters 
 	# viewing!(rend; opts...)
+
+	if !backdrop
+		println("Transparent backdrop")
+		glClearColor(1.0, 0.0, 0.0, 0.0)
+	end
 
    glUniform1i(glGetUniformLocation(rend.gl.program,"render_mode"), GLint(rend.view.mode))
    glUniform1f(glGetUniformLocation(rend.gl.program,"opacity"), GLfloat(1.0))
@@ -680,7 +693,8 @@ function (rend::AbstractRenderer)(file::String; image_function=(depth)->depth, o
 	end
 
    # Re-render in the current mode
-   update!(rend)
+	viewing!(rend; opts...)
+	update!(rend)
    render(rend)
 
 	# Reset to display
