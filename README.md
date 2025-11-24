@@ -9,6 +9,7 @@ Texture maps, per-vertex, and per-face colours are supported. Sub-typing of the 
 ```
 # Render two meshes (format as described above)
 
+julia> using MeshRender
 julia> rend = Renderer([F1,F2], [V1,V2], [N1,N2])
 julia> rend()
 
