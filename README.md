@@ -7,15 +7,15 @@ Texture maps, per-vertex, and per-face colours are supported. Sub-typing of the 
 ## Schematic example
 
 ```
-# Render two meshes in window of size w×h
-rend = Renderer((w,h), [F1,F2], [V1,V2], [N1,N2])
+# Render two meshes
+rend = Renderer([F1,F2], [V1,V2], [N1,N2])
 rend()
 
 # Save a capture of the current view
 rend("view.png")
 ```
 
-## Textured OBJ file example
+## Render textured OBJ files in a 1000×1000 viewport
 ```
 # Run the wrapper render_objs() on data from https://3d.si.edu/collections/apollo11
 
@@ -25,7 +25,7 @@ objs = ["apollo/x3d-cm-exterior-shell-90k-uvs.obj",
 pngs = ["apollo/x3d-cm-exterior-shell-90k-comp-4k.png",
         "apollo/x3d-cm-exterior-top-160k-comp-4k.png"]
 
-MeshRender.render_objs(objs,pngs)
+MeshRender.render_objs(objs, pngs; view_size=(1000,1000))
 ```
 
 ## Keyboard controls
@@ -40,9 +40,11 @@ MeshRender.render_objs(objs,pngs)
 
 ## Installation and loading
 
+Requires a working OpenGL4 installation
+
 Clone the repository, and run the following in Julia:
 * `using Pkg` 
-* `Pkg.dev("/yourpath/MeshRender.jl")`
+* `Pkg.develop(path="/yourpath/MeshRender.jl")`
 * `using MeshRender`
 
 Build the local documentation

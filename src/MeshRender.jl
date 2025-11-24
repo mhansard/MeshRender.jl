@@ -72,10 +72,10 @@ end
 
 """ Compute the generalized arcball vector. 
 """
-function arcball_vector(image_size::SVector{2,<:Number}, cursor_pos::SVector{2,<:Number})
+function arcball_vector(view_size::SVector{2,<:Number}, cursor_pos::SVector{2,<:Number})
 	# Center and radial 2D vector
-	c = (image_size .- 1.0) ./ 2.0
-	q = (cursor_pos .- c) ./ (min(image_size...)-1.0)
+	c = (view_size .- 1.0) ./ 2.0
+	q = (cursor_pos .- c) ./ (min(view_size...)-1.0)
 	# Radial 3D vector
 	SVector{3,<:Number}(q[1], -q[2], arcball_depth(q))
 end
@@ -213,9 +213,9 @@ mutable struct ViewData
 	rotation::Matrix{Float64}
 	rotation_pre::Matrix{Float64}
 
-	function ViewData(image_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); mode=colour)
+	function ViewData(view_size::Tuple{Int,Int}, select::Tuple{Int,Int}=(1,1); mode=colour)
 
-		view = new(image_size[1], image_size[2], select)
+		view = new(view_size[1], view_size[2], select)
 		GLFW.Init()
 		GLFW.WindowHint(GLFW.SAMPLES, 4)
       GLFW.WindowHint(GLFW.OPENGL_DEBUG_CONTEXT,GL_TRUE)
@@ -246,14 +246,14 @@ mutable struct Renderer <: AbstractRenderer
 	available::NamedTuple{(:colour,:texture,:points),Tuple{Bool,Bool,Bool}}
 
    @doc """
-       Renderer(image_size::Tuple{Int,Int},
-                faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
+       Renderer(faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
                 vertices::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}},
                 normals::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}};
                 texmaps::AbstractVector=[],
                 teximgs::AbstractVector=[],
                 colours::AbstractVector=[],
                 pointclouds::AbstractVector=[],
+					 view_size::Tuple{Int,Int},
                 centre::Bool=true,
                 scale::AbstractVector=[],
                 fov::Float64=60.0,
@@ -288,14 +288,14 @@ rend()
 rend("view.png")
 ```
 """
-   function Renderer(image_size::Tuple{Int,Int},
-                     faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
+   function Renderer(faces::AbstractVector{<:AbstractVector{<:SVector{3,<:Integer}}},
                      vertices::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}},
                      normals::AbstractVector{<:AbstractVector{<:SVector{3,<:Real}}};
                      texmaps::AbstractVector=[],
                      teximgs::AbstractVector=[],
                      colours::AbstractVector=[],
                      pointclouds::AbstractVector=[],
+							view_size::Tuple{Int,Int},
                      centre::Bool=true,
                      scales::AbstractVector=[],
                      fov::Float64=60.0,
@@ -350,8 +350,8 @@ rend("view.png")
 		end
 
 		# Allocate ViewData and GLData objects 
-		rend = new(ViewData(image_size, (1,length(faces)); mode),
-		           GLData(image_size, length.(faces), length.(pointclouds), vsh, fsh), 
+		rend = new(ViewData(view_size, (1,length(faces)); mode),
+		           GLData(view_size, length.(faces), length.(pointclouds), vsh, fsh), 
 					  .!isempty.((colours,teximgs,pointclouds)))
 
 		# Initialize GLData objects
@@ -368,21 +368,22 @@ rend("view.png")
 end
 
 
-function Renderer(image_size::Tuple{Int,Int},
-                  faces::AbstractVector{<:SVector{3,<:Integer}},
+function Renderer(faces::AbstractVector{<:SVector{3,<:Integer}},
                   vertices::AbstractVector{<:SVector{3,<:Real}},
                   normals::AbstractVector{<:SVector{3,<:Real}};
 						texmaps::AbstractVector=[],
 						teximgs::AbstractMatrix=[],
 						colours::AbstractVector=[],
-						pointclouds::AbstractVector=[], etc...)
+						pointclouds::AbstractVector=[],
+						view_size::Tuple{Int,Int},
+						etc...)
 
 	texmaps = isempty(texmaps) ? [] : [texmaps]
 	teximgs = isempty(teximgs) ? [] : [teximgs]
 	colours = isempty(colours) ? [] : [colours]
 	pointclouds = isempty(pointclouds) ? [] : [pointclouds]
-	Renderer(image_size, [faces], [vertices], [normals];
-	         texmaps, teximgs, colours, pointclouds, etc...)
+	Renderer(view_size, [faces], [vertices], [normals];
+	         texmaps, teximgs, colours, pointclouds, view_size, etc...)
 end
 
 """ Compile and link shaders.
@@ -739,7 +740,8 @@ MeshRender.render_objs(objs,pngs)
 ```
 """
 function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.obj"], 
-                     texnames::AbstractVector=["spot/texture.png","banana/texture.png"])
+                     texnames::AbstractVector=["spot/texture.png","banana/texture.png"]; 
+							view_size=(1200,1200))
 
 	# Use GeometryBasics to decompose the meshes
 
@@ -754,7 +756,7 @@ function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.o
 		texmaps = []
 		teximgs = []
 	end
-	rend = MeshRender.Renderer((1200,1200), faces, vertices, normals; texmaps, teximgs)
+	rend = MeshRender.Renderer(faces, vertices, normals; texmaps, teximgs, view_size)
 	rend()
 end
 
