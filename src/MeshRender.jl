@@ -761,4 +761,13 @@ function render_objs(objnames::AbstractVector=["spot/model.obj", "banana/model.o
 end
 
 
+function load_obj(objname)
+	mesh = GeometryBasics.expand_faceviews(GeometryBasics.uv_normal_mesh(load(objname)))
+	faces = SVector{3,Int64}.(GeometryBasics.faces(mesh))
+	vertices = SVector{3,Float64}.(GeometryBasics.coordinates(mesh))
+	normals = SVector{3,Float64}.(GeometryBasics.normals(mesh))
+	return (vertices,faces,normals)
+end
+
+
 end
